@@ -29,8 +29,9 @@ The files that contain data for each api/thermal category are listed below (n is
     psu<n>, contains the temperature of the psu module, for api "get_temperature"
     psu<n>, contains the critical threshold, for api "get_high_threshold"
 5. asic:
-    asic, contains the temperature of the asic, for api "get_temperature"
-    no support for "get_high_threshold"
+    mlxsw/thermal_zone_temp, contains the temperature of the asic, for api "get_temperature"
+    mlxsw/thermal_zone_temp vs. asic, which is better?
+    mlxsx/temp_trip_cri, contains the critical threshold, for api "get_high_threshold" 
 
 To handle the mapping from the SKU to the thermal hierarchy and from each (thermal device, api) pair to a certain file that contains the data the api required, the following data structures are introduced, representing the mapping from SKU to hierarchy of the files, including:
     1. a dictionary representing mapping from SKU to profile
@@ -64,7 +65,7 @@ To handle the mapping from the SKU to the thermal hierarchy and from each (therm
         }
         api_handler_asic = {
             "get_temperature":"asic",
-            "get_high_threshold":None
+            "get_high_threshold":"mlxsx/temp_trip_cri"
         }
         api_handler_module = {
             "get_temperature":"temp_input_module{}",
