@@ -1,7 +1,7 @@
 Thermal design
 
 Terms
-thermal category: stands for the device category the thermal monitors for, including cpu core, cpu pack, asic, module and psu.
+thermal category: stands for the device category the thermal monitors for, including cpu core, cpu pack, module and psu.
 switch model: stands for a set of SKUs that share the same PCB, port portfolios
 
 The purpose of thermal design is to represent:
@@ -13,7 +13,7 @@ The purpose of thermal design is to represent:
 2. set_high_threshold, currently it's read only. I think each device's high threshold, exceeding which a cool action should be triggered, should be designated by the device vendor since configuring it to a very high value might damage the device.
 
 Typically, a file in /var/run/hw-management/thermal represents the data each api required for each thermal device. Filename conventions regarding device categories and SKUs are similar but there is still minor difference that should be well handled, like:
-    1. All SKUs can have thermals in different type of devices, including cpu core, cpu pack, asic and each sfp modules.
+    1. All SKUs can have thermals in different type of devices, including cpu core, cpu pack, each sfp modules and thermal sensors on the board.
     2. The filename conventions containing data for each API differ on a thermal category basis.
     3. Different SKUs have different number for each category of devices, like number of cpu cores, sfp modules, therefore their thermals differing.
 
@@ -28,20 +28,25 @@ The files that contain data for each api/thermal category are listed below (n is
 4. psu module:
     psu<n>, contains the temperature of the psu module, for api "get_temperature"
     psu<n>, contains the critical threshold, for api "get_high_threshold"
-5. asic:
-    mlxsw/thermal_zone_temp, contains the temperature of the asic, for api "get_temperature"
-    mlxsw/thermal_zone_temp vs. asic, which is better?
-    mlxsx/temp_trip_cri, contains the critical threshold, for api "get_high_threshold" 
+5. ambient thermals:
+    ambient thermal sensors are sensors on the board that collect the temperature information around some key components of the device or areas, including asic, port, fan, comex, board.
+    ambient thermal sensors only have temperature and don't have thresholds.
 
 To handle the mapping from the SKU to the thermal hierarchy and from each (thermal device, api) pair to a certain file that contains the data the api required, the following data structures are introduced, representing the mapping from SKU to hierarchy of the files, including:
     1. a dictionary representing mapping from SKU to profile
         sku_to_profile = {"sku name":profile-number},
         where the profile-number is the index of thermal_profiles, namely thermal_profiles[sku_to_profile["SKU"]] represents the profile of SKU.
     2. maintain profile for each switch model, since we have a set of SKUs that maps to a unique model
+       for ambient thermal sensors a list is maintained, containing the list of ambient thermal sensors on the SKU.
+       for other categories of sensors start-index and total-count are maintained for each category standing for the minimum index and total count of sensors of that category. a 0 total-count indicates there's no this category of thermal sensors on the SKU.
         profile = {
-            "cpu core":(start, number),//start number of cpu core, number of cpu core
-            "module number":(start, number),
-            "psu number":(start, number)
+            "cpu core":(start-index, total-count),//start number of cpu core, number of cpu core
+            "module number":(start-index, total-count),
+            "psu number":(start-index, total-count),
+            "gearbox number":(start-index, total-count)
+            "ambient thermal":(0, 
+                [list of ambient thermals on the SKU]
+            )
         }
         thermal_profiles is a list of profile.
     3. prototype of api_handler: a set of dictionaries mapping api to the file representing it.
@@ -63,10 +68,6 @@ To handle the mapping from the SKU to the thermal hierarchy and from each (therm
             "get_temperature":"cpu_pack",
             "get_high_threshold":"cpu_pack_alarm"
         }
-        api_handler_asic = {
-            "get_temperature":"asic",
-            "get_high_threshold":"mlxsx/temp_trip_cri"
-        }
         api_handler_module = {
             "get_temperature":"temp_input_module{}",
             "get_high_threshold":"temp_crit_module{}"
@@ -84,6 +85,18 @@ To handle the mapping from the SKU to the thermal hierarchy and from each (therm
         }
         device_categories = ["cpu_core", "cpu_pack", "asic", "module"]
         api_names = ["get_temperature", "get_high_threshold"]
+    4. name conventions of thermal sensors: we design the name conventions of each category of thermal sensors following the file sensor.conf. currently the name conventions are listed below:
+        cpu_core : "CPU Core {} Temp", 
+        cpu_pack : "CPU Pack Temp",
+        modules : "xSFP module {} Temp",
+        psu : "PSU-{} Temp",
+        gearbox : "Gearbox {} Temp"
+       ambient thermal sensors:
+        asic : "Ambient ASIC Temp",
+        port : "Ambient Port Side Temp",
+        fan : "Ambient Fan Side Temp",
+        comex : "Ambient COMEX Temp",
+        board : "Ambient Board Temp"
 
 high level working flow:
     1. On pmon docker startup:
