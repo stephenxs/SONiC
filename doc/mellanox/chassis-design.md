@@ -12,7 +12,26 @@ Currently there are following data that should be returned by chassis API:
     1. Currently two common classes have been implemented to represent vendor-independent logic like EEPROM reading, caching and parsing.
     2. A class derived from TlvInfoDecoder should be introduced in order to encapsulates mlnx specific details, including: the path of the symbol link point to the real eeprom file in sysfs.
     3. All required info are stored in private members of the above-mentioned derived class in order to avoid reading and parsing EEPROM every time when API is invoked. This is feasible since data in EEPROM data can not be changed. (However, if online reprogramming EEPROM is supported, this part should be removed.)
-2. Reboot cause can be retrieved by reading file /host/reboot-cause/previous-reboot-cause.txt and parsing to align with the format defined in base class. Currently only causes like “reboot”, “fast reboot” are supported.
+2. Reboot cause can be retrieved by reading reboot cause files located in /var/run/hw-management/system/reset_* files, as below:
+   - reset_main_pwr_fail       :   "Power Loss"
+   - reset_aux_pwr_or_ref      :   "Power Loss"
+   - reset_asic_thermal        :   "Thermal Overload: ASIC"
+   - reset_hotswap_or_wd       :   "Watchdog"
+   - reset_swb_wd              :   "Watchdog"
+   - reset_sff_wd              :   "Watchdog
+   - reset_fw_reset            :   "Reset by ASIC firmware"
+   - reset_long_pb             :   "Reset by long press on power button"
+   - reset_short_pb            :   "Reset by short press on power button"
+   - reset_comex_thermal       :   "ComEx thermal shutdown"
+   - reset_comex_pwr_fail      :   "ComEx power fail"
+   - reset_comex_wd            :   "Reset requested from ComEx"
+   - reset_from_asic           :   "Reset requested from ASIC"
+   - reset_reload_bios         :   "Reset caused by BIOS reload"
+   - reset_sw_reset            :   "Software reset"
+   - reset_hotswap_or_halt     :   "Reset caused by hotswap or halt"
+   - reset_from_comex          :   "Reset from ComEx"
+   - reset_voltmon_upgrade_fail:   "Reset due to voltage monitor devices upgrade failure"
+
 3. Versions of components, including BIOS, CPLD and firmware. Related mechanism will be covered in the next section.
 4. sfps, fans and psus related data will be (have been) designed and implemented independently and discussion of them is out of the scope of this design.
 
