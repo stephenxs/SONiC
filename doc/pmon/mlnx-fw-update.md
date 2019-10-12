@@ -62,7 +62,7 @@ cpldupdate is a tool provided and customized for Mellanox by Lattice Semiconduct
     cpldupdate --dev <device_name> <file1> <file2>
     ```
     This is the default mode which will check the device type, if it supports GPIO, then it will use GPIO, otherwise will use fw.
-    The device_name is file name of the mst device, typically the file in /dev/mst/mtxxxx_pciconf0
+    The device_name is file name of the mst device, typically /dev/mst/mtxxxx_pciconf0
     The file1 and file2 are CPLD image files.
 2. Update CPLD via GPIO:
     ```
@@ -85,14 +85,50 @@ The tool used to update BIOS can not be provided in SONiC due to license restric
 1. onie_fw_update add <file>, which add the file into its list pending to be updated. file must be a valid ONIE firmware.
 2. onie_fw_update update, which reboots the switch to ONIE and update firmware previously added, thus the updating procedure being done.
 
+##### Grub parameter modified by multiple programs
+To trigger the switch to reboot to ONIE onie_fw_update has to modify grub parameters. Other operation like `sonic_installer install` also modifies grub parameters. If these operations execute interleavingly, some error can occur. For example, consider the following sequence:
+
+    Current booting image is <sonic-image-1>
+    onie_fw_update add <fw-image>
+    sonic_install install <sonic-image-2>
+    onie_fw_update update
+
+        system reboot to ONIE and do the real firmware update work
+        after update done ONIE try recovering the previous saved boot sequence, which may overwrite update done by sonic_installer install.
+
+    system reboot to sonic-image-1, teh update done by install lost.
+
+Example 2:
+
+    Current booting image is <sonic-image-1>
+    onie_fw_update add <fw-image>
+    sonic_install set_next_image <sonic-image-2>
+    onie_fw_update update
+    system reboot to <sonic-image-1>, the update done by set_next_image lost.
+
+We will analyse all possible operation and the interleaving sequences.
+
+1. onie_fw_update add <file>
+
+        envrionment variable affected:
+            next: set to onie
+
+2. sonic_installer set_next_boot
+
+        envrionment variable affected:
+            next: set to next image
+
+3. sonic_installer set_default or sonic_installer install
+
+        envrionment variable affected:
+            default: set to newly installed image
+
+This issue can be resolved if onie_fw_update doesn't affect any envrionment variable used by sonic_installer. For example a new variable can be introduced for onie_fw_update.
+
 ### Open questions
 #### cpld update
 1. We have two ways to update cpld, cpldupdate and onie-fw-update. Which way is preferred?
-2. What do file1 and file2 stand for? Images for each CPLD? Is it necessary to provide both file1 and file2 when update? Can one of them be updated independently?
-
-#### ASIC firmware
-Open questions to be discussed with team & ll team:
-1. Is the only device file having the name convention of "/dev/mst/mt[0-9]{5}_pciconf0" the one that should be fet mlxfwmanager with when updating ASIC firmware?
+2. Is the only device file having the name convention of "/dev/mst/mt[0-9]{5}_pciconf0" the one that should be fet mlxfwmanager with when updating ASIC firmware?
 
 #### To do list after discussed with team
 1. in terms of cpld updating, which tool is faster and less likely to impact normal service?
