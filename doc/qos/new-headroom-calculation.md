@@ -1,3 +1,5 @@
+# Headroom Dynamically Calculation
+
 ## Introduction
 
 RoCE is an important feature in the datacenter network. As we all knew, headroom size is the key to ensure lossless traffic which is the key of RoCE.
@@ -6,17 +8,17 @@ Currently, the headroom size is calculated by looking up the port's cable length
 In general, we would like to:
 
 1. have the headroom calculated in the code so that the users won't need to be familiar with that.
-2. support headroom override, which means we will have fixed headroom size on some ports regardless of the ports' length and cable length.
+2. support headroom override, which means we will have fixed headroom size on some ports regardless of the ports' speed and cable length.
 3. have more shared buffer and less headroom.
 
 The headroom size calculation discussed in this design is implemented in the `BufferManager` which is a daemon running in the swss docker. When a port's speed or cable length updated it's resposible for updating the headroom size accordingly.
 
 ### Current Solution
 
-- When system start, it reads the pg_profile_lookup.ini and generate an internal lookup table indexed by speed and cable length, and containing size, xon, xoff and threshold.
+- When system start, it reads the pg_profile_lookup.ini and generates an internal lookup table indexed by speed and cable length, and containing size, xon, xoff and threshold.
 - When a port's cable length updated, it records the cable length of the port. But it doesn't update relavent tables accordingly.
 - When a port's speed updated,
-    1. It looks up the (speed, cable length) pair in the BUFFER_PROFILE table or generate a new profile according to the internal lookup table.
+    1. It looks up the (speed, cable length) tuple in the BUFFER_PROFILE table or generate a new profile according to the internal lookup table.
     2. And then update the port's BUFFER_PG table for the lossless priority group.
 
 ### The Requirement
@@ -31,7 +33,42 @@ We will have the following groups of parameters
 Based on the parameters and a well-known formula the code in buffer manager will do the calculation and not take it from a pre-defined values as we have today.
 On top of that, we need to support the ability to override headroom and not to calculate it in the code.
 
-Meanwhile, the backward compatibility for those vendors who haven't provided the tables required for new buffer size calculation is also provided.
+Meanwhile, the backward compatibility for the vendors who haven't provided the tables required for new buffer size calculation is also provided.
+
+### Backward compatibility
+
+Backward compatibility is supported for vendors who haven't provided the related tables yet. In this section we will introduce the way it is achieved.
+
+Currently, the SONiC system starts buffer manager from swss docker by the `supervisor` according to the following settings in [`/etc/supervisor/conf.d/supervisord.conf`](https://github.com/Azure/sonic-buildimage/blob/master/dockers/docker-orchagent/supervisord.conf) in `swss` docker.
+
+```shell
+[program:buffermgrd]
+command=/usr/bin/buffermgrd -l /usr/share/sonic/hwsku/pg_profile_lookup.ini
+priority=11
+autostart=false
+autorestart=false
+stdout_logfile=syslog
+stderr_logfile=syslog
+```
+
+For the vendors who implement dynamically buffer calculating, a new command line option `-c` is provided. As a result, the `supervisor` setting will be:
+
+```shell
+[program:buffermgrd]
+command=/usr/bin/buffermgrd -c
+priority=11
+autostart=false
+autorestart=false
+stdout_logfile=syslog
+stderr_logfile=syslog
+```
+
+A new class is introduced to implement the dynamically buffer calculating while the current way is remained.
+When buffer manager starts it will test the command line options, loading the corresponding class according to the command line option.
+
+The database schema for the new buffer calculation is added on top of that of the current one without any field renamed or removed, which means it won't hurt the current approach.
+
+In the rest part of this document, we will focus on the new implementation and the SONiC-to-SONiC upgrade process from the current implementation to the new one.
 
 ## Database schema design
 
@@ -62,13 +99,13 @@ The key can be the chip/vendor name in captical letters.
 
 Every vendor should provide the ASIC_TABLE on a per-SKU basis. It should be stored in `/usr/shared/sonic/device/<platfrom>/<SKU>/buffers.json.j2` on the switch.
 
-When the system starts for the first time, buffer management related tables will be initialized by `config qos reload` via rendering this template. After that the table will be loaded from config database each time system starts.
+When the system starts for the first time, it generates the configuration by reloading minigraph in which buffer management related tables will be initialized by `config qos reload` via rendering this template. After that the table will be loaded from config database each time system starts.
 
 When reloading minigraph, all data from this table will be cleared and then reinitialized by `config qos reload`.
 
 It's possible that multiple SKUs share the same switch chip thus the same set of parameters. In this case, proper vendor-specific steps should be taken to reduce redundant source files.
 
-For Mellanox, this file is implemented only in one of all the SKUs sharing the same switch chip while all other SKUs having symbol links pointing to that file. For example, for switches based on Spectrum 1 switch chip, `buffers.json.j2` is defined in `sonic-buildimage/device/mellanox/x86_64-mlnx_msn2700-r0/` while all other Spectrum-1-based SKUs having symbol links pointing to it.
+For Mellanox, this file is only in one of all the SKUs sharing the same switch chip while all other SKUs having symbol links pointing to that file. For example, for switches based on Spectrum 1 switch chip, `buffers.json.j2` is defined in `sonic-buildimage/device/mellanox/x86_64-mlnx_msn2700-r0/` while all other SKUs based on the same chip having symbol links pointing to it.
 
 ***Example***
 
@@ -93,8 +130,7 @@ Example of pre-defined json file:
             "cell_size": "96",
             "pipeline_latency": "18",
             "mac_phy_delay": "0.8",
-            "peer_response_time": "3.8",
-            "small_packet_percentage": "100"
+            "peer_response_time": "3.8"
         }
     }
 ```
@@ -118,7 +154,7 @@ Every vendor should provide the PERIPHERAL_TABLE on a per-SKU basis. It should b
 
 It's possible that multiple SKUs share the same model of gearbox. In this case similar steps as that for ASIC_TABLE should be taken to reduce redundant source files.
 
-Basically the initialization of PERIPHERAL table is the same as that of ASIC_TABLE except that it's possible a same SKU adopts variant models of gearbox in variant batch of products. In this case, parameters for all possible gearbox models should be listed in the `buffers.json` file and we suggest to find out the correct gearbox_delay in the following way:
+Basically the initialization of PERIPHERAL table is the same as that of ASIC_TABLE except that it's possible a same SKU adopts variant models of gearbox in variant batch of products. In this case, parameters for all possible gearbox models should be listed in the `buffers.json.j2` file and we suggest to find out the correct gearbox_delay in the following way:
 
 1. The gearbox model equipped in the switch should be exposed and able to be read via sysfs or something like that.
 2. When the system starts for the first time or executed `config load_minigraph` or `config qos reload`, it should read the gearbox model in the way mentioned in 1. and then load the data into config database.
@@ -169,6 +205,16 @@ Table BUFFER_PROFILE contains the profiles of headroom parameters and the propor
 
 ##### Schema
 
+Currently, there are the following fields in `BUFFER_PROFILE` table.
+
+```schema
+    key             = BUFFER_PROFILE|<name>
+    pool            = reference to BUFFER_POOL object
+    size            = 6*DIGIT               ; size of headroom for ingress lossless
+    dynamic_th      = 2*DIGIT               ; for dynamic pools, proportion of free pool the port, PG tuple referencing this profile can occupy
+    static_th       = 10*DIGIT              ; similar to dynamic_th but in unit of bytes
+```
+
 The schema is the same as it is except the following field added.
 
 ```schema
@@ -188,12 +234,12 @@ The following entries are mandatory and should be defined in `/usr/shared/sonic/
 - egress_lossy_profile
 - q_lossy_profile
 
-The initialization of the above entries is the same as that of ASIC_TABLE.
+The initialization of the above entries is the same as that of `ASIC_TABLE`.
 
 Besides the above entries, there are the following ones which will generated on-the-fly:
 
 1. Headroom override entries for lossless traffic, which will be configured by user.
-2. Entries for ingress loessless traffic with specific cable length and speed. They will be referenced by `BUFFER_PG` table and created when `speed`, `cable length` updated.
+2. Entries for ingress loessless traffic with specific cable length and speed. They will be referenced by `BUFFER_PG` table and created when `speed`, `cable length` updated and no such entry according to the `speed` and `cable length` is in the table.
 
 ***Example***
 
@@ -233,7 +279,14 @@ An example of mandatory entries on Mellanox platform:
 
 Table BUFFER_PG contains the maps from the `port, priority group` tuple to the `buffer profile` object.
 
+Currently, there are the following fields in `BUFFER_PG` table.
+
 ##### Schema
+
+```schema
+    key             = BUFFER_PG|<name>
+    profile         = reference to BUFFER_PROFILE object
+```
 
 The schema is the same as it is except the following field added.
 
@@ -242,7 +295,7 @@ The schema is the same as it is except the following field added.
                                             ; Default value is "static"
 ```
 
-The `static` profile is configured by CLI while the `dynamic` profile is dynamically calculated when system starts or a port's cable length or speed is updated.
+The `static` profile is configured by CLI while the `dynamic` profile is dynamically calculated when system starts or a port's `cable length` or `speed` is updated.
 
 ##### Initialization
 
@@ -250,7 +303,7 @@ The entry `BUFFER_PG|<port>|0` is for ingress lossy traffic and will be generate
 
 The headroom override entries are configured via CLI.
 
-Other entries are for ingress lossless traffic and will be generated when the ports' speed or cable length updated.
+Other entries are for ingress lossless traffic and will be generated when the ports' `speed` or `cable length` updated.
 
 #### Other tables referenced
 
@@ -345,7 +398,7 @@ __Figure 1: Calculate the Headroom For a Port, PG__
 
 ### Main Flows
 
-#### On system start
+#### System starts
 
 Try the following steps in order:
 
@@ -356,7 +409,7 @@ Try the following steps in order:
     - If succeeded, set `lookup` flag.
     - Otherwise, fail the daemon.
 
-#### On Port Speed updated
+#### Port Speed updated
 
 There are admin speed and operational speed in the system, which stand for the speed configured by user and negotiated with peer device respectively. In the buffer design, we are talking about the admin speed.
 
@@ -372,12 +425,12 @@ There are admin speed and operational speed in the system, which stand for the s
 
 __Figure 1: Port Speed Updated__
 
-#### On Port Cable length updated
+#### Port Cable length updated
 
 1. Check whether the cable length is legal.
     - If yes, push the length into the internal map.
     - If no, ignore. Error message should be logged.
-2. After a port's cable length updated, update its BUFFER_PG according to its speed and cable length.
+2. After a port's cable length updated, update its `BUFFER_PG` according to its speed and cable length.
 
 ![Flow](headroom-calculation-images/cable-length-update.png "Figure 1: Cable Length Updated")
 
@@ -420,10 +473,28 @@ When a static buffer profile is updated, it will be propagated to `Buffer Orch` 
 
 ![Flow](headroom-calculation-images/static-profile-updated.png "Figure 1: Static Buffer Profile Updated")
 
-### Warm restart consideration
+### Upgrade flows
 
-When system starts, the port's headroom will always be recalculated according to its speed and cable length. As a result, when system warm restarts between images whose headroom size differs, the `Buffer Manager` won't read data from `BUFFER_PG` table but regenerate one for each `port`, `priority group` according to the `port`'s `speed` and `cable length` and then push the item into `BUFFER_PG` table.
-In this sense, no specific steps is required for configuration migration.
+In this section we will discuss the flows of upgrading the switch from current implementation to the new one by:
+
+- Cold reboot
+- Warm reboot
+
+#### Cold reboot
+
+When system cold reboot from current implementation to new one, `db_migrator` will take care of new table generating.
+
+#### Warm reboot
+
+When system starts, the port's headroom will always be recalculated according to its speed and cable length. As a result, when system warm restarts between images whose headroom size differs, the `Buffer Manager` won't read data from `BUFFER_PG` table but regenerate one for each `port`, `priority group` according to the port's `speed` and `cable length` and then push the item into `BUFFER_PG` table.
+
+During the warm reboot the static configuration like ports' `speed` and `cable length` are not supposed to be changed, which means the data in `BUFFER_PG` and `BUFFER_PROFILE` are not changed before and after warm reboot.
+
+In this sense, no specific steps is required regarding configuration migration for the above tables.
+
+For table `BUFFER_POOL` things will differ. Each time the headroom size updated the buffer pool size should be updated accordingly. When the system warm reboots, the headroom size of each port will be updated in order, which means the buffer pool size will be updated for many times, which should be avoided as the correct value has already been in the switch chip.
+
+This can be achieved by checking whether the warm reboot is finished ahead of calling SAI api.
 
 ## Command line interface
 
@@ -461,8 +532,14 @@ The following conditions among parameters must be satisfied:
     - If arbitrary cable length is legal, should a no-longer-used buffer profile be removed from the database?
         - If no, the database probably will be stuffed with those items?
         - If yes, need to maintain a reference number for the profiles, which introduces unnecessary complexity.
+
+    Status: Closed.
+    Decision: We're going to support arbitrary cable length.
 2. After port cable length updated, should the BUFFER_PG table be updated as well?
     - Current implementation don't do that. Why?
+
+    Status: Closed.
+    Decision: Yes. After port cable length pudated the BUFFER_PG table should be updated accordingly.
 3. With headroom size dynamically configured, is it necessary to recalculate the buffer pool size?
     - For the egress_lossy_pool, ingress_lossless_pool and ingress_lossy pool their size is the total size minus the total of headroom of all ports.
 4. Lossless is supported on priority 3-4 only. Is this by design or standard or any historical reason?
