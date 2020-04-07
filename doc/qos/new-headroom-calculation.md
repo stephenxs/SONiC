@@ -97,36 +97,75 @@ The key can be the chip/vendor name in captical letters.
 
 ##### Initialization
 
-Every vendor should provide the ASIC_TABLE on a per-SKU basis. It should be stored in `/usr/shared/sonic/device/<platfrom>/<SKU>/buffers.json.j2` on the switch.
+Every vendor should provide the ASIC_TABLE for all switch chips it supports in SONiC. It should be stored in `files/build_templates` in the [sonic-buildimage](https://github.com/azure/sonic-buildimage) repo and `/usr/shared/sonic/template/asic_config.json.j2` on the switch.
 
-When the system starts for the first time, it generates the configuration by reloading minigraph in which buffer management related tables will be initialized by `config qos reload` via rendering this template. After that the table will be loaded from config database each time system starts.
+There should be a map from SKU to switch chip in the template. When the template is being rendering, the SKU will be mapped to switch chip and the switch chip is used to choose which group of parameters in the `ASIC_TABLE` will be adopted on the switch. As a result, the `ASIC_TABLE` with a single group of parameters will be loaded into config database.
 
-When reloading minigraph, all data from this table will be cleared and then reinitialized by `config qos reload`.
+The rendering takes place on the switch when the command `config qos reload` is executed when the switch starts for the first time or `config load_minigraph` is executed.
 
-It's possible that multiple SKUs share the same switch chip thus the same set of parameters. In this case, proper vendor-specific steps should be taken to reduce redundant source files.
-
-For Mellanox, this file is only in one of all the SKUs sharing the same switch chip while all other SKUs having symbol links pointing to that file. For example, for switches based on Spectrum 1 switch chip, `buffers.json.j2` is defined in `sonic-buildimage/device/mellanox/x86_64-mlnx_msn2700-r0/` while all other SKUs based on the same chip having symbol links pointing to it.
+After that the table will be loaded from config database each time system starts.
 
 ***Example***
 
 The below is an example for Mellanox switches based on Spectrum-1 switch chip.
 
-Demostration of a way to reduce redundant source files.
+Example of pre-defined json.j2 file:
 
-```shell
-stephens@0348aa35bcb1:/sonic$ ls device/mellanox/x86_64-mlnx_msn2700-r0/ACS-MSN2700/buffers_defaults_t* -l
--rw-r--r-- 1 stephens input 3196 Feb 29 01:48 device/mellanox/x86_64-mlnx_msn2700-r0/ACS-MSN2700/buffers_defaults_t0.j2
--rw-r--r-- 1 stephens input 3196 Feb 29 01:48 device/mellanox/x86_64-mlnx_msn2700-r0/ACS-MSN2700/buffers_defaults_t1.j2
-stephens@0348aa35bcb1:/sonic$ ls device/mellanox/x86_64-mlnx_msn2410-r0/ACS-MSN2410/buffers_defaults_t* -l
-lrwxrwxrwx 1 stephens input 63 Feb 29 01:48 device/mellanox/x86_64-mlnx_msn2410-r0/ACS-MSN2410/buffers_defaults_t0.j2 -> ../../x86_64-mlnx_msn2700-r0/ACS-MSN2700/buffers_defaults_t0.j2
-lrwxrwxrwx 1 stephens input 63 Feb 29 01:48 device/mellanox/x86_64-mlnx_msn2410-r0/ACS-MSN2410/buffers_defaults_t1.j2 -> ../../x86_64-mlnx_msn2700-r0/ACS-MSN2700/buffers_defaults_t1.j2
+```json
+{% if sonic_asic_platform == 'mellanox' %}
+    {% set platform2asic = {
+            'x86_64-mlnx_lssn2700-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn2010-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn2100-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn2410-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn2700-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn2700_simx-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn2740-r0':'MELLANOX-SPECTRUM'
+            'x86_64-mlnx_msn3700c-r0':'MELLANOX-SPECTRUM-2'
+            'x86_64-mlnx_msn3700-r0':'MELLANOX-SPECTRUM-2'
+            'x86_64-mlnx_msn3700_simx-r0':'MELLANOX-SPECTRUM-2'
+            'x86_64-mlnx_msn3800-r0':'MELLANOX-SPECTRUM-2'
+            'x86_64-mlnx_msn4700_simx-r0':'MELLANOX-SPECTRUM-3'
+            'x86_64-mlnx_msn4700-r0':'MELLANOX-SPECTRUM-3'
+        }
+    %}
+    {% set asic_type = platform2asic[platform] %}
+    "ASIC_TABLE": {
+        {% if asic_type == 'MELLANOX-SPECTRUM' %}
+        "MELLANOX-SPECTRUM": {
+            "cell_size": "96",
+            "pipeline_latency": "18",
+            "mac_phy_delay": "0.8",
+            "peer_response_time": "3.8"
+        }
+        {% endif %}
+
+        {% if asic_type == 'MELLANOX-SPECTRUM-2' %}
+        "MELLANOX-SPECTRUM-2": {
+            "cell_size": "144",
+            "pipeline_latency": "18",
+            "mac_phy_delay": "0.8",
+            "peer_response_time": "3.8"
+        }
+        {% endif %}
+
+        {% if asic_type == 'MELLANOX-SPECTRUM-3' %}
+        "MELLANOX-SPECTRUM-3": {
+            "cell_size": "144",
+            "pipeline_latency": "18",
+            "mac_phy_delay": "0.8",
+            "peer_response_time": "3.8"
+        }
+        {% endif %}
+    }
+{% endif %}
 ```
 
-Example of pre-defined json file:
+Example of a rendered json snippet (which will be loaded into config database) on a Mellanox Spectrum switch:
 
 ```json
     "ASIC_TABLE": {
-        "MELLANOX": {
+        "MELLANOX-SPECTRUM": {
             "cell_size": "96",
             "pipeline_latency": "18",
             "mac_phy_delay": "0.8",
@@ -150,26 +189,34 @@ This table is not supposed to be updated on-the-fly.
 
 ##### Initialization
 
-Every vendor should provide the PERIPHERAL_TABLE on a per-SKU basis. It should be stored in `/usr/shared/sonic/device/<platfrom>/<SKU>/buffers.json.j2` on the switch.
+Every vendor should provide the `PERIPHERAL_TABLE` for all peripheral devices it supports in SONiC, like gearbox models. It should be stored in `files/build_templates/peripheral_config.json.j2` in the [sonic-buildimage](https://github.com/azure/sonic-buildimage) repo and `/usr/shared/sonic/template/peripheral_config.json.j2` on the switch.
 
-It's possible that multiple SKUs share the same model of gearbox. In this case similar steps as that for ASIC_TABLE should be taken to reduce redundant source files.
+When the template is being rendering, all entries in `PERIPHERAL_TABLE` will be loaded into the configuration database.
 
-Basically the initialization of PERIPHERAL table is the same as that of ASIC_TABLE except that it's possible a same SKU adopts variant models of gearbox in variant batch of products. In this case, parameters for all possible gearbox models should be listed in the `buffers.json.j2` file and we suggest to find out the correct gearbox_delay in the following way:
+For non-chassis systems, the gearbox model should be determined by the SKU, which is the same as that of `ASIC_TABLE`. As a result, the initialization of `PERIPHERAL_TABLE` is the same as that of `ASIC_TABLE`.
 
-1. The gearbox model equipped in the switch should be exposed and able to be read via sysfs or something like that.
-2. When the system starts for the first time or executed `config load_minigraph` or `config qos reload`, it should read the gearbox model in the way mentioned in 1. and then load the data into config database.
-3. For the other cases when system starts, it loads the data from `CONFIG_DB`.
+For chassis systems the gearbox in variant line-cards can differ, which means a mapping from port/line-card to gearbox model is required to get the correct gearbox model for a port. This requires additional field defined in `PORT` table or some newly introduced table. As this part hasn't been defined in community, we will not discuss this case for now.
 
 The below is an example for Mellanox switches.
 
 ***Example***
 
 ```json
+{% if sonic_asic_platform == 'mellanox' %}
+    {% set platform_with_gearbox = ['x86_64-mlnx_msn3800-r0'] %}
+    {% set platform2gearbox = {
+            'x86_64-mlnx_msn3800-r0':'MELLANOX-PERIPHERAL-1'
+        }
+    %}
+    {% if platform in platform_with_gearbox %}
+    {% set gearbox_type = platform2gearbox[platform] %}
     "PERIPHERAL_TABLE": {
-        "MELLANOX": {
+        "MELLANOX-PERIPHERAL-1": {
             "gearbox_delay": "9.765"
         }
     }
+    {% endif %}
+{% endif %}
 ```
 
 #### Table ROCE_TABLE
@@ -343,10 +390,10 @@ The values used in the above procedure are fetched from the following table:
 
 - `cable length`: CABLE_LENGTH|\<name\>|\<port\>
 - `port speed`: PORT|\<port name\>|speed
-- `kb on gearbox`: PERIPHERIAL_TABLE|\<vendor name\>|other_delay
-- `mac/phy delay`: ASIC_TABLE|\<vendor name\>|mac_phy_delay
-- `peer response`: ASIC_TABLE|\<vendor name\>|peer_response_time
-- `cell`: ASIC_TABLE|\<vendor name\>|cell_size
+- `kb on gearbox`: PERIPHERIAL_TABLE|\<gearbox name\>|other_delay
+- `mac/phy delay`: ASIC_TABLE|\<asic name\>|mac_phy_delay
+- `peer response`: ASIC_TABLE|\<asic name\>|peer_response_time
+- `cell`: ASIC_TABLE|\<asic name\>|cell_size
 - `small packet percentage`: ROCE_TABLE|\<name\>|small_packet_percentage
 - `mtu`: ROCE_TABLE|\<name\>|mtu
 
@@ -366,6 +413,8 @@ __Figure 1: Allocate a New Profile__
 
 #### Release a no-longer-referenced profile
 
+This is for dynamic profile only. Static profile won't be removed even it isn't referenced any more.
+
 When a port's `cable length` or `speed` updated, the profile related to the old `cable length` or `speed` tuple probably won't be referenced any longer. In this case, the profile should be removed.
 
 ![Flow](headroom-calculation-images/release-profile.png "Figure 1: Release a No-Longer-Referenced Profile")
@@ -377,6 +426,10 @@ __Figure 1: Release a No-Longer-Referenced Profile__
 When any port's `cable length` or `speed` updated or `admin state` changed, the buffer pool size should be recalculated.
 
 Each time the buffer pool size recalculated, it should go over headroom of all `port`, `priority group` tuple to calculate the total consumption of shared buffers. The administratively down port doesn't consume buffer hense they should be ruled out.
+
+An exception is warm reboot. During warm reboot the headroom is updated for each ports, which causes the buffer pool be updated for many times. However, the correct buffer pool data that it will eventually be has already been in switch chip. In this sense, to update buffer pool frequently is unnecessary and should be avoided.
+
+To achieve that, the buffer pool shouldn't be updated during warm reboot and will be updated once warm reboot finished.
 
 ![Flow](headroom-calculation-images/calculate-pool-size.png "Figure 1: Calculate the Pool Size")
 
@@ -397,17 +450,6 @@ When any port's `cable length` or `speed` updated, the headroom buffer should be
 __Figure 1: Calculate the Headroom For a Port, PG__
 
 ### Main Flows
-
-#### System starts
-
-Try the following steps in order:
-
-1. Load the table `ASIC_TABLE`, `PERIPHERAL_TABLE` and `ROCE_TABLE` into internal data structures:
-    - If succeeded, set `calculate` flag. Finish.
-    - Otherwise, try 2.
-2. If failed, load the traditional pg_profile_lookup.ini into a lookup table.
-    - If succeeded, set `lookup` flag.
-    - Otherwise, fail the daemon.
 
 #### Port Speed updated
 
@@ -473,26 +515,46 @@ When a static buffer profile is updated, it will be propagated to `Buffer Orch` 
 
 ![Flow](headroom-calculation-images/static-profile-updated.png "Figure 1: Static Buffer Profile Updated")
 
-### Upgrade flows
+### Start and upgrade flows
 
-In this section we will discuss the flows of upgrading the switch from current implementation to the new one by:
+In this section we will discuss the start flow and the flows of upgrading the switch from current implementation to the new one by:
 
 - Cold reboot
 - Warm reboot
 
-#### Cold reboot
+#### Upgrade by cold reboot
 
-When system cold reboot from current implementation to new one, `db_migrator` will take care of new table generating.
+When system cold reboot from current implementation to new one, `db_migrator` will take care of generating new table and converting old data.
+
+1. Initialize `ASIC_TABLE`, `PERIPHERAL_TABLE` and `ROCE_TABLE` from predefined templates into config database, just like what is done when the system starts for the first time or `config load_minigraph`
+2. Convert the current data in `BUFFER_PROFILE` and `BUFFER_PG` into new format with `type` inserted via the following logic:
+
+    - If a `BUFFER_PROFILE` has name convention of `pg_lossless_<speed>_<length>_profile`, it will be treated as a dynamically generated profile based on the port's speed and cable length. In this case its `type` will be initialized as `dynamic`.
+    - If a `BUFFER_PG` references a profile whose type is `dynamic`, it will be also treated as a dynamic buffer pg object and its `type` will be initialized as `dynamic`.
+    - If a `BUFFER_PROFILE` or `BUFFER_PG` item doesn't meet any of the above conditions, it will be treated as a `static` profile.
+
+After that, `Buffer Manager` will start as normal flow which will be described in the next section.
+
+#### Daemon starts with -c option
+
+When the daemon starts, it will:
+
+1. Test the command line options. If `-c` option is provided, the class for new buffer calculation will be instantiated. Otherwise it should be the current approach of calculating headroom buffers, which is out of the scope of this design.
+2. Load table `ASIC_TABLE`, `PERIPHERAL_TABLE` and `ROCE_TABLE` from `CONFIG_DB` into internal data structures.
+3. Load table `CABLE_LENGTH` and `PORT` from `CONFIG_DB` into internal data structures.
+4. After that it will handle items in `CALBLE_LENGTH` and `PORT` tables via calculating the headroom size for the ports and then pushing result into `BUFFER_PROFILE` and `BUFFER_PG` tables except the `port` and `priority group` tuples configured headroom override.
+
+`BUFFER_PROFILE` and `BUFFER_PG` are tables in `CONFIG_DB` which survives reboot, which means the result calculated by previous boot is already in `CONFIG_DB`. By doing so the buffer profile for each `port` and `priority group` won't be changed across reboot.
 
 #### Warm reboot
 
-When system starts, the port's headroom will always be recalculated according to its speed and cable length. As a result, when system warm restarts between images whose headroom size differs, the `Buffer Manager` won't read data from `BUFFER_PG` table but regenerate one for each `port`, `priority group` according to the port's `speed` and `cable length` and then push the item into `BUFFER_PG` table.
+When system starts, the port's headroom will always be recalculated according to its speed and cable length. As a result, when system warm restarts between images who calculate headroom size in different ways, the `Buffer Manager` will eventually regenerate items for each `port`, `priority group` according to the ports' `speed` and `cable length` and then push the item into `BUFFER_PG` table.
 
 During the warm reboot the static configuration like ports' `speed` and `cable length` are not supposed to be changed, which means the data in `BUFFER_PG` and `BUFFER_PROFILE` are not changed before and after warm reboot.
 
 In this sense, no specific steps is required regarding configuration migration for the above tables.
 
-For table `BUFFER_POOL` things will differ. Each time the headroom size updated the buffer pool size should be updated accordingly. When the system warm reboots, the headroom size of each port will be updated in order, which means the buffer pool size will be updated for many times, which should be avoided as the correct value has already been in the switch chip.
+For table `BUFFER_POOL` things will differ. Each time the headroom size updated the buffer pool size should be updated accordingly. When the system warm reboots, the headroom size of each port will be updated as well, which means the buffer pool size will be updated for many times even though the value they eventually should be have already been in the switch chip. This should be avoided as the correct value has already been in the switch chip.
 
 This can be achieved by checking whether the warm reboot is finished ahead of calling SAI api.
 
@@ -507,7 +569,6 @@ sonic#config interface headroom_override <port> <enable|disable> <profile>
 The following conditions among parameters must be satisfied:
 
 - The profile must be defined in advance.
-- 
 
 ### To configure a static profile
 
@@ -518,11 +579,12 @@ sonic#config buffer_profile <name> add <xon> <xoff> <headroom> <dynamic_th>
 sonic#config buffer_profile <name> del
 ```
 
-Among all the parameters, `xoff` is optional and all others are mandatory.
+Among all the parameters, for `xoff` and `headroom`, if one is provided, the other one will be optional and conducted via the formula `xon + xoff = headroom`.
+All other parameters are mandatory.
 The following conditions among parameters must be satisfied:
 
 - `xon` + `xoff` < `headroom`; For Mellanox platform xon + xoff == headroom
-- When delete a profile, its `type` must be static.
+- When delete a profile, its `type` must be static and isn't referenced by any port
 
 ## Open questions
 
@@ -534,49 +596,27 @@ The following conditions among parameters must be satisfied:
         - If yes, need to maintain a reference number for the profiles, which introduces unnecessary complexity.
 
     Status: Closed.
+
     Decision: We're going to support arbitrary cable length.
 2. After port cable length updated, should the BUFFER_PG table be updated as well?
     - Current implementation don't do that. Why?
 
     Status: Closed.
+
     Decision: Yes. After port cable length pudated the BUFFER_PG table should be updated accordingly.
 3. With headroom size dynamically configured, is it necessary to recalculate the buffer pool size?
     - For the egress_lossy_pool, ingress_lossless_pool and ingress_lossy pool their size is the total size minus the total of headroom of all ports.
 4. Lossless is supported on priority 3-4 only. Is this by design or standard or any historical reason?
-5. Can shared buffer pool be updated on-the-fly?
-
-```syslog
-Mar 22 14:29:05.991084 mtbc-sonic-01-2410 ERR swss#orchagent: :- meta_generic_validation_set: SAI_BUFFER_POOL_ATTR_TYPE:SAI_ATTR_VALUE_TYPE_INT32 attr is create only and cannot be modified
-Mar 22 14:29:05.991153 mtbc-sonic-01-2410 ERR swss#orchagent: :- processBufferPool: Failed to modify buffer pool, name:ingress_lossless_pool, sai object:180000000009af, status:-5
-```
-
+5. Can shared buffer pool be updated on-the-fly? Can buffer profile be updated on-the-fly? Only the dynamic_th.
+    
+    Status: Open.
+    
+    Decision: Should be. But there is issues in SONiC ["dynamic_th" parameter for lossless buffer profile can't be change on the fly.](https://github.com/Azure/sonic-buildimage/issues/3971)
 6. There are default headrooms for lossy traffic which are determined by SDK and SONiC isn't aware. Do they affect shared buffer calculation?
 7. There is limitations from SDK/FW that there is a cap of the total number of headroom sizes of all priority groups belong to a port. For 2700 split port, this cap prevent the headroom size from being programed if the speed is 50G and cable length is 300m.
 8. Originally buffer configuration had been stored in APPL_DB but were moved to CONFIG_DB later. Why? [doc](https://github.com/Azure/SONiC/wiki/Converting-old-or-creating-new-buffers-config) for reference.
-9. Can buffer profile be updated on-the-fly? Only the dynamic_th.
-
-### Database design principles -- CONFIG_DB vs APPL_DB
-
-In the current solution all buffer relavent tables are stored in CONFIG_DB which is supposed to contain the configuration supplied by user. However, some buffer data, including some entries in the BUFFER_PROFILE table and all entries in the BUFFER_PG table, are dynamically generated when ports' speed or cable length updated and will be cleared during `config qos reload`, which means they are not real configuration.
-
-To have dynamic entries in CONFIG_DB is confusing. But a user is able to distinguish dynamic one from static one easily considering the following two points:
-
-1. There are only limit number of combinations of speed, cable length pair, the number of dynamically generated entries in BUFFER_PROFILE table is small.
-2. All entries in BUFFER_PG table are dynamically generated.
-
-In this sense, to have dynamic and static entries mixed together mixed together isn't a big problem for now.
-
-However, in this design the above 2 points will no longer be true because:
-
-1. The variant cable length will be supported, which means the number of dynamically generated entries in BUFFER_PROFILE table which related to cable length can be much larger.
-2. There is going to be headroom override which means BUFFER_PG and BUFFER_PROFILE table will contain both dynamic and static entries.
-
-These will confuse user, making them difficult to distinguish static and dynamic entries and understand the configuration. In addition, this makes the logic of `config qos reload` more complicated, because it has to remain user supplied configuration while clearing all the dynamic entries.
-
-To resolve the issue, we have the following principles in the database schema design:
-
-1. All the configuration are stored in CONFIG_DB, including BUFFER_PG, BUFFER_POOL and BUFFER_PROFILE tables.
-2. Dynamically generated tables are stored in APPL_DB.
+9. In theory, when system starts, as `BUFFER_PROFILE` and `BUFFER_PG` tables are stored in config database which survives system reboot, the `Buffer Orch` can receive items of the tables ahead of they being recalculated by `Buffer Manager` based on the current algorithm and `cable length` and `speed`. If the headroom size calculated differs before and after reboot, it can cause the items in the tables be deployed twice in which the first deployment will be overwritten quickly by the second one.
+10. For chassis systems the gearbox in variant line-cards can differ, which means a mapping from port/line-card to gearbox model is required to get the correct gearbox model for a port. This requires additional field defined in `PORT` table or some newly introduced table. As this part hasn't been defined in community, we will not discuss this case for now.
 
 ### Review Comments Fixed
 
