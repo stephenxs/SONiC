@@ -1,9 +1,32 @@
-# Headroom Dynamically Calculation
+# Dynamically Headroom Calculation
+
+## Abbreviations
+
+| Term | Meaning |
+|:--------:|:---------------------------------------------:|
+| Statically headroom look-up | The current solution of headroom calculation. In this solution, the headroom is retrieved by looking up a pre-defined table with the port's cable length and speed as the key. Only a limited set of cable length is supported. Or `statically look-up` for short.|
+| Dynamically headroom calculation | The solution of headroom calculation which will be introduced in this design. In this solution the headroom is calculated by the well known formula based with the cable length and speed as input. Arbitrary cable length will be supported. Or `dynamically calculation` for short.|
 
 ## Introduction
 
 RoCE is an important feature in the datacenter network. As we all knew, headroom size is the key to ensure lossless traffic which is the key of RoCE.
 Currently, the headroom size is calculated by looking up the port's cable length and speed in the pre-defined pg_profile_lookup.ini, which has some drawbacks.
+
+### Current Solution
+
+Currently the headroom buffer calculation is done by looking up the `pg_profile_lookup.ini` table with the ports' cable length and speed as the key.
+
+- When system start, it reads the pg_profile_lookup.ini and generates an internal lookup table indexed by speed and cable length, and containing size, xon, xoff and threshold.
+- When a port's cable length updated, it records the cable length of the port. But it doesn't update relavent tables accordingly.
+- When a port's speed updated,
+    1. It looks up the (speed, cable length) tuple in the BUFFER_PROFILE table or generate a new profile according to the internal lookup table.
+    2. And then update the port's BUFFER_PG table for the lossless priority group.
+
+There are some limitations:
+
+- The `pg_profile_lookup.ini` is predefined for each SKU. When a new system supports SONiC the file should be provided accordingly.
+- Only a fixed set of cable lengths are supproted.
+- Static headroom isn't supported.
 
 In general, we would like to:
 
@@ -11,15 +34,7 @@ In general, we would like to:
 2. support headroom override, which means we will have fixed headroom size on some ports regardless of the ports' speed and cable length.
 3. have more shared buffer and less headroom.
 
-The headroom size calculation discussed in this design is implemented in the `BufferManager` which is a daemon running in the swss docker. When a port's speed or cable length updated it's resposible for updating the headroom size accordingly.
-
-### Current Solution
-
-- When system start, it reads the pg_profile_lookup.ini and generates an internal lookup table indexed by speed and cable length, and containing size, xon, xoff and threshold.
-- When a port's cable length updated, it records the cable length of the port. But it doesn't update relavent tables accordingly.
-- When a port's speed updated,
-    1. It looks up the (speed, cable length) tuple in the BUFFER_PROFILE table or generate a new profile according to the internal lookup table.
-    2. And then update the port's BUFFER_PG table for the lossless priority group.
+The headroom size calculation discussed in this design will be implemented in the `BufferManager` which is a daemon running in the swss docker.
 
 ### The Requirement
 
@@ -33,7 +48,18 @@ We will have the following groups of parameters
 Based on the parameters and a well-known formula the code in buffer manager will do the calculation and not take it from a pre-defined values as we have today.
 On top of that, we need to support the ability to override headroom and not to calculate it in the code.
 
-Meanwhile, the backward compatibility for the vendors who haven't provided the tables required for new buffer size calculation is also provided.
+Meanwhile, the backward compatibility for the vendors who haven't provided the tables required for dynamically headroom calculation is also provided.
+
+### The behavior of the dynamically headroom calculation solution
+
+- When a port's cable length or speed updated, headroom of all lossless priority groups will be updated according to the well-known formula and then programed to ASIC.
+- When a port is shut down/started up or its headroom size is updated, the size of shared buffer pool will be adjusted accordingly. The less the headroom, the more the shared buffer and vice versa. By doing so, we are able to have as much shared buffer as possible.
+- When SONiC switch is upgraded from statically look-up to dynamically calculation, a port's headroom size of all the lossless priority groups will remain untouched until its cable length or speed updated. The shared buffer pool will always be adjusted according to the headroom size.
+- Pre-defined table isn't required any more. When a new platform supports SONiC only a few parameters are required.
+- Support arbitrary cable length.
+- Support headroom override, which means user can configure static headroom on certain ports.
+- Only priority groups 3-4 are treated as lossless priority and their headrooms will be updated dynamically as mentioned above. If lossless traffic need to run on other priorities, headroom override can be used to achieve that.
+- Ports' speed and cable length need to be statically configured.
 
 ### Backward compatibility
 
@@ -63,12 +89,12 @@ stdout_logfile=syslog
 stderr_logfile=syslog
 ```
 
-A new class is introduced to implement the dynamically buffer calculating while the current way is remained.
+A new class is introduced to implement the dynamically buffer calculating while the class for statically look-up solution is remained.
 When buffer manager starts it will test the command line options, loading the corresponding class according to the command line option.
 
-The database schema for the new buffer calculation is added on top of that of the current one without any field renamed or removed, which means it won't hurt the current approach.
+The database schema for the dynamically buffer calculation is added on top of that of the current solution without any field renamed or removed, which means it won't hurt the current solution.
 
-In the rest part of this document, we will focus on the new implementation and the SONiC-to-SONiC upgrade process from the current implementation to the new one.
+In the rest part of this document, we will focus on the dynamically headroom calculation and the SONiC-to-SONiC upgrade process from the current solution to the new one.
 
 ## Database schema design
 
@@ -193,9 +219,11 @@ Every vendor should provide the `PERIPHERAL_TABLE` for all peripheral devices it
 
 When the template is being rendering, all entries in `PERIPHERAL_TABLE` will be loaded into the configuration database.
 
-For non-chassis systems, the gearbox model should be determined by the SKU, which is the same as that of `ASIC_TABLE`. As a result, the initialization of `PERIPHERAL_TABLE` is the same as that of `ASIC_TABLE`.
+There should be a gearbox configure file in which the gearbox model installed in the system is defined.
 
-For chassis systems the gearbox in variant line-cards can differ, which means a mapping from port/line-card to gearbox model is required to get the correct gearbox model for a port. This requires additional field defined in `PORT` table or some newly introduced table. As this part hasn't been defined in community, we will not discuss this case for now.
+For non-chassis systems, all ports share the unique gearbox model. As a result, the initialization of `PERIPHERAL_TABLE` is the same as that of `ASIC_TABLE`.
+
+For chassis systems the gearbox in variant line-cards can differ, which means a mapping from port/line-card to gearbox model is required to get the correct gearbox model for a port. This requires additional field defined in `PORT` table or some newly introduced table. As this part is still under discussion in community, we will not discuss this case for now.
 
 The below is an example for Mellanox switches.
 
@@ -515,9 +543,9 @@ When a static buffer profile is updated, it will be propagated to `Buffer Orch` 
 
 ![Flow](headroom-calculation-images/static-profile-updated.png "Figure 1: Static Buffer Profile Updated")
 
-### Start and upgrade flows
+### Start and SONiC-to-SONiC upgrade flows
 
-In this section we will discuss the start flow and the flows of upgrading the switch from current implementation to the new one by:
+In this section we will discuss the start flow and the flows of SONiC-to-SONiC upgrade from statically headroom look-up to dynamically calculation by:
 
 - Cold reboot
 - Warm reboot
@@ -539,7 +567,7 @@ After that, `Buffer Manager` will start as normal flow which will be described i
 
 When the daemon starts, it will:
 
-1. Test the command line options. If `-c` option is provided, the class for new buffer calculation will be instantiated. Otherwise it should be the current approach of calculating headroom buffers, which is out of the scope of this design.
+1. Test the command line options. If `-c` option is provided, the class for dynamically buffer calculation will be instantiated. Otherwise it should be the current solution of calculating headroom buffers, which is out of the scope of this design.
 2. Load table `ASIC_TABLE`, `PERIPHERAL_TABLE` and `ROCE_TABLE` from `CONFIG_DB` into internal data structures.
 3. Load table `CABLE_LENGTH` and `PORT` from `CONFIG_DB` into internal data structures.
 4. After that it will handle items in `CALBLE_LENGTH` and `PORT` tables via calculating the headroom size for the ports and then pushing result into `BUFFER_PROFILE` and `BUFFER_PG` tables except the `port` and `priority group` tuples configured headroom override.
@@ -585,6 +613,14 @@ The following conditions among parameters must be satisfied:
 
 - `xon` + `xoff` < `headroom`; For Mellanox platform xon + xoff == headroom
 - When delete a profile, its `type` must be static and isn't referenced by any port
+
+### To display the current configuration
+
+The command `mmuconfig` is extended to display the current configuration.
+
+```cli
+sonic#mmuconfig -l
+```
 
 ## Open questions
 
