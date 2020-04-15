@@ -54,11 +54,11 @@ Meanwhile, the backward compatibility for the vendors who haven't provided the t
 
 - When a port's cable length or speed updated, headroom of all lossless priority groups will be updated according to the well-known formula and then programed to ASIC.
 - When a port is shut down/started up or its headroom size is updated, the size of shared buffer pool will be adjusted accordingly. The less the headroom, the more the shared buffer and vice versa. By doing so, we are able to have as much shared buffer as possible.
-- When SONiC switch is upgraded from statically look-up to dynamically calculation, a port's headroom size of all the lossless priority groups will remain untouched until its cable length or speed updated. The shared buffer pool will always be adjusted according to the headroom size.
+- When SONiC switch is upgraded from statically look-up to dynamically calculation, a port's headroom size of all the lossless priority groups will be calculated. The shared buffer pool will be adjusted according to the headroom size as well.
 - Pre-defined table isn't required any more. When a new platform supports SONiC only a few parameters are required.
 - Support arbitrary cable length.
 - Support headroom override, which means user can configure static headroom on certain ports.
-- Only priority groups 3-4 are treated as lossless priority and their headrooms will be updated dynamically as mentioned above. If lossless traffic need to run on other priorities, headroom override can be used to achieve that.
+- Priority groups on which lossless traffic runs on is configurable. By default they're 3, 4.
 - Ports' speed and cable length need to be statically configured.
 
 ### Backward compatibility
@@ -463,15 +463,16 @@ To achieve that, the buffer pool shouldn't be updated during warm reboot and wil
 
 __Figure 1: Calculate the Pool Size__
 
-#### Calculate the headroom for a port, PG
+#### Calculate the headroom for a port, PG tuple
 
-When any port's `cable length` or `speed` updated, the headroom buffer should be recalculated and deployed. The flow is:
+When any port's `cable length` or `speed` or `lossless PG` updated, the headroom buffer should be recalculated and deployed. The flow is:
 
 1. Find or create a buffer profile according to the new `cable length` and `speed` tuple.
-2. Update the port's buffer pg and update the BUFFER_PG table.
-3. Once BufferOrch is notifed on the BUFFER_PG updated, it will update the related SAI object.
-4. Recalculate the shared buffer pool size.
-5. Release the buffer profile referenced by old `cable length` and `speed` tuple.
+2. If `lossless PG` updated, remove the old `BUFFER_PG` object related to the old `lossless PG`.
+3. Update the port's buffer pg and update the `BUFFER_PG` table.
+4. Once BufferOrch is notifed on the `BUFFER_PG` updated, it will update the related SAI object.
+5. Recalculate the shared buffer pool size.
+6. Release the buffer profile referenced by old `cable length` and `speed` tuple.
 
 ![Flow](headroom-calculation-images/recalculate.png "Figure 1: Calculate the Headroom For a Port, PG")
 
@@ -485,7 +486,7 @@ There are admin speed and operational speed in the system, which stand for the s
 
 1. Read the speed of the port
 2. Check the following conditions, exit on anyone fails:
-    - Check whether `type` in `BUFFER_PG|<port>|3-4` is of `dynamic` which means dynamically calculating headroom is required for the port.
+    - Check whether `type` in `BUFFER_PG|<port>|<lossless PG>` is of `dynamic` which means dynamically calculating headroom is required for the port.
     - Check whether there is a cable length configured for the port.
     - Check whether there is a speed, cable length pair in the internal map.
 3. Allocate a buffer profile related to the `cable length` and `speed`.
@@ -543,6 +544,10 @@ When a static buffer profile is updated, it will be propagated to `Buffer Orch` 
 
 ![Flow](headroom-calculation-images/static-profile-updated.png "Figure 1: Static Buffer Profile Updated")
 
+#### Configure the priorities on which lossless traffic runs
+
+When the lossless priorities are configured, the system should recalcuate the port's headroom, just like what is done when `speed` or `cable length` is updated.
+
 ### Start and SONiC-to-SONiC upgrade flows
 
 In this section we will discuss the start flow and the flows of SONiC-to-SONiC upgrade from statically headroom look-up to dynamically calculation by:
@@ -588,19 +593,11 @@ This can be achieved by checking whether the warm reboot is finished ahead of ca
 
 ## Command line interface
 
-### To configure headroom override on a port
-
-```cli
-sonic#config interface headroom_override <port> <enable|disable> <profile>
-```
-
-The following conditions among parameters must be satisfied:
-
-- The profile must be defined in advance.
-
 ### To configure a static profile
 
 A static profile can be used to override the headroom size and dynamic_th of a port, PG.
+
+The command `configure buffer_profile` is designed to create or destroy a static buffer profile which will be used for headroom override.
 
 ```cli
 sonic#config buffer_profile <name> add <xon> <xoff> <headroom> <dynamic_th>
@@ -614,6 +611,51 @@ The following conditions among parameters must be satisfied:
 - `xon` + `xoff` < `headroom`; For Mellanox platform xon + xoff == headroom
 - When delete a profile, its `type` must be static and isn't referenced by any port
 
+### To configure headroom override on a port
+
+The command `configure interface headroom_override` is designed to enable or disable the headroom override for a certain port.
+
+```cli
+sonic#config interface headroom_override <port> <enable|disable> <profile>
+```
+
+The following conditions among parameters must be satisfied:
+
+- The profile must be defined in advance.
+
+### To configure cable length
+
+The command `configure interface cable_length` is designed to configure the cable length of a port.
+
+```cli
+sonic#config interface cable_length <port> <length>
+```
+
+All the parameters are mandatory.
+
+The `length` stands for the length of the cable connected to the port. It should be integer and in the unit of meter.
+
+The following command is used to configure the cable length of Ethernet0 as 10 meters.
+
+```cli
+sonic#config interface cable_length Ethernet0 10
+```
+
+### To configure lossless traffic on certain priority
+
+The command `configure interface lossless_pg <set|clear>` is designed to configure the priorities used for lossless traffic.
+
+```cli
+sonic#config interface lossless_pg set <port> <pg-map>
+sonic#config interface lossless_pg clear <port>
+```
+
+All the parameters are mandatory.
+
+The `pg-map` stands for the map of priorities for lossless traffic. It should be a string and in form of a bit map like `3-4` or `3-4,6`. The `-` connects the lower bound and upper bound of a range of priorities and the `,` seperates multiple ranges.
+
+Every time the lossless priority is set the old value will be overwritten.
+
 ### To display the current configuration
 
 The command `mmuconfig` is extended to display the current configuration.
@@ -621,6 +663,10 @@ The command `mmuconfig` is extended to display the current configuration.
 ```cli
 sonic#mmuconfig -l
 ```
+
+### To clear all QoS related configuration from database
+
+The command `config qos clear` is provided to all the QoS configurations from database, including the all the above mentioned configurations.
 
 ## Open questions
 
@@ -665,3 +711,9 @@ sonic#mmuconfig -l
 7. Suggest to have separate flow diagram for each flow. it is more readable
 8. Check also Onyx design on buffers. Owner is Vova. ask for the doc and set a meeting with him.
 9. regarding warmboot: some of the configuration is done during running and this means we keep changing. the buffer configuration is already configured in the ASIC during the warmboot we should not reconfigure it again and again. need to configure it once at the end of the warmboot. till then dont touch it.
+
+### To do
+
+1. No need to recalculate buffer pool size every time a port's `speed` or `cable length` or `lossless PG` is updated. A counter example: system starts, the buffer pool need to be calculated only once.
+2. Need to define when the parameters should be saved into the internal data structure. I suggest do that in the meta flows.
+3. Need to make sure the way the `BUFFER_PG` linked to the old `lossless PG` is removed.
