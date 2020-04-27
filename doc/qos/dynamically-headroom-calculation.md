@@ -512,7 +512,7 @@ The values used in the above procedure are fetched from the following table:
 
 - `cable length`: CABLE_LENGTH|\<name\>|\<port\>
 - `port speed`: PORT|\<port name\>|speed
-- `kb on gearbox`: PERIPHERIAL_TABLE|\<gearbox name\>|other_delay
+- `kb on gearbox`: PERIPHERIAL_TABLE|\<gearbox name\>|gearbox_delay
 - `mac/phy delay`: ASIC_TABLE|\<asic name\>|mac_phy_delay
 - `peer response`: ASIC_TABLE|\<asic name\>|peer_response_time
 - `cell`: ASIC_TABLE|\<asic name\>|cell_size
@@ -541,7 +541,7 @@ When a port's `cable length` or `speed` updated, the profile related to the old 
 
 ![Flow](headroom-calculation-images/release-profile.png "Figure 1: Release a No-Longer-Referenced Profile")
 
-__Figure 1: Release a No-Longer-Referenced Profile__
+__Figure 2: Release a No-Longer-Referenced Profile__
 
 #### Calculate the Buffer Pool Size
 
@@ -561,7 +561,7 @@ The administratively down ports doesn't consume buffer hense they should be rule
 
 ![Flow](headroom-calculation-images/calculate-pool-size.png "Figure 1: Calculate the Pool Size")
 
-__Figure 1: Calculate the Pool Size__
+__Figure 3: Calculate the Pool Size__
 
 #### Calculate and deploy the headroom for a port, PG tuple
 
@@ -589,7 +589,7 @@ The flow is:
 
 ![Flow](headroom-calculation-images/recalculate.png "Figure 1: Calculate and deploy the Headroom For a Port, PG")
 
-__Figure 1: Calculate and deploy the Headroom For a Port, PG__
+__Figure 4: Calculate and deploy the Headroom For a Port, PG__
 
 ### Main Flows
 
@@ -609,7 +609,7 @@ There are admin speed and operational speed in the system, which stand for the s
 
 ![Flow](headroom-calculation-images/cable-length-speed-update.png "Figure 1: Cable length or speed updated")
 
-__Figure 1: Cable length or speed updated__
+__Figure 5: Cable length or speed updated__
 
 #### Port is administratively up/down
 
@@ -625,7 +625,7 @@ When a static headroom is configured on a port
 
 ![Flow](headroom-calculation-images/add-headroom-override.png "Figure 1: Apply Static Headroom Configure")
 
-__Figure 1: Apply Static Headroom Configure__
+__Figure 6: Apply Static Headroom Configure__
 
 #### Remove static headroom configure
 
@@ -634,15 +634,17 @@ When a static headroom is removed on a port:
 1. Allocate the buffer profile according to the port's speed and cable length.
 2. Recalculate the buffer pool size.
 
-![Flow](headroom-calculation-images/remove-headroom-override.png "Figure 1: Remove Static Headroom Configure")
+![Flow](headroom-calculation-images/remove-headroom-override.png "Figure 7: Remove Static Headroom Configure")
 
-__Figure 1: Remove Static Headroom Configure__
+__Figure 7: Remove Static Headroom Configure__
 
 #### Update static buffer profile
 
 When a static buffer profile is updated, it will be propagated to `Buffer Orch` and then `SAI`. The buffer pgs that reference this buffer profile don't need to be updated. However, as the total number of headroom buffer updated, the buffer pool size should be recalculated.
 
 ![Flow](headroom-calculation-images/static-profile-updated.png "Figure 1: Static Buffer Profile Updated")
+
+__Figure 8: Static Buffer Profile Updated__
 
 #### Configure the priorities on which lossless traffic runs
 

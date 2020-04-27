@@ -103,24 +103,35 @@ sequenceDiagram
   Buffer Manager -->> Database Service: Notify BUFFER_PG|<port>|lossless_pg_old removed
   par Notify orchagent in another thread
   Database Service -->>+ Buffer Orch: Notify BUFFER_PG|<port>|lossless_pg_old removed
+  loop For each priority
   Buffer Orch -->> SAI: set_ingress_priority_group_attribute(attribute = null oid)
+  end
   Buffer Orch -->>- Database Service: Finish
   end
   end
-  opt headroom increased and not warm-reboot
-  Buffer Manager ->> Buffer Manager: Recalculate shared buffer pools size and program to ASIC
+  opt headroom size increased
+  Buffer Manager ->> Buffer Manager: Accumulate the total of headroom size
+  alt total headroom <= max headroom
+  Buffer Manager ->> Buffer Manager: Recalculate shared buffer pool and populate to ASIC
+  else total headroom size exceeds max headroom size, fatal
+  Buffer Manager ->> Buffer Manager: (data in APPL_DB untouched)
+  Buffer Manager -->> Syslog: Error message should be logged
+  Buffer Manager -->> System: Procedure exit
+  end
   end
   opt lossless_pg != empty set
   Buffer Manager ->> Buffer Manager: Update the port's BUFFER_PG table entry indexed by (port, lossless_pg)
   Buffer Manager -->> Database Service: Update BUFFER_PG
   par Notify orchagent in another thread
-  Database Service -->>+ Buffer Orch: Notify BUFFER_PG updated
+  Database Service -->>+ Buffer Orch: Notify BUFFER_PG|<port>|lossless_pg updated
+  loop For each priority
   Buffer Orch -->> SAI: set_ingress_priority_group_attribute
+  end
   Buffer Orch -->>- Database Service: Finish
   end
   end
   opt headroom decreased and not warm-reboot
-  Buffer Manager ->> Buffer Manager: Recalculate shared buffer pools size and program to ASIC
+  Buffer Manager ->> Buffer Manager: Recalculate shared buffer pools size and populate to ASIC
   end
   opt speed or length updated
   Buffer Manager ->> Buffer Manager: Release profile for (speed_old, length_old)
