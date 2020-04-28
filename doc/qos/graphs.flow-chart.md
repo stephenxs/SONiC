@@ -38,10 +38,10 @@ sequenceDiagram
 
   System -->>+ Buffer Manager: Release a profile
   Note over System, Buffer Manager: parameter: (speed, length)
-  Buffer Manager ->>+ Database Service: Check whether the profile is derived from CONFIG_DB.BUFFER_PROFILE
-  Database Service ->>- Buffer Manager: Result
-  Buffer Manager ->>+ Database Service: Check whether the profile is referenced any longer
-  Database Service ->>- Buffer Manager: Result
+  Buffer Manager -->>+ Database Service: Check whether the profile is derived from CONFIG_DB.BUFFER_PROFILE
+  Database Service -->>- Buffer Manager: Result
+  Buffer Manager -->>+ Database Service: Check whether the profile is referenced any longer
+  Database Service -->>- Buffer Manager: Result
   opt the profile isn't derived from CONFIG_DB nor referenced any longer
   Buffer Manager -->> Database Service: Destroy an entry in BUFFER_PROFILE table
   par Notify orchagent in another thread
@@ -94,9 +94,11 @@ sequenceDiagram
   participant SAI
 
   System -->>+ Buffer Manager: Recalculate a port's headroom with new parameters
-  Note over System, Database Service: parameter: (speed, length, lossless_pg), current value: (speed_old, length_old, lossless_pg_old)
-  opt speed or length updated
+  Note over System, SAI: parameter: (speed, length, lossless_pg, profile), current value: (speed_old, length_old, lossless_pg_old, profile_old)
+  alt speed or length updated
   Buffer Manager ->> Buffer Manager: Allocate a profile for (speed, length)
+  else Configure headroom override
+  Buffer Manager ->> Buffer Manager: Use the profile passed-in
   end
   opt lossless_pg != lossless_pg_old
   Buffer Manager ->> Buffer Manager: Remove the port's BUFFER_PG table entry indexed by (port, lossless_pg_old)
@@ -107,16 +109,6 @@ sequenceDiagram
   Buffer Orch -->> SAI: set_ingress_priority_group_attribute(attribute = null oid)
   end
   Buffer Orch -->>- Database Service: Finish
-  end
-  end
-  opt headroom size increased
-  Buffer Manager ->> Buffer Manager: Accumulate the total of headroom size
-  alt total headroom <= max headroom
-  Buffer Manager ->> Buffer Manager: Recalculate shared buffer pool and populate to ASIC
-  else total headroom size exceeds max headroom size, fatal
-  Buffer Manager ->> Buffer Manager: (data in APPL_DB untouched)
-  Buffer Manager -->> Syslog: Error message should be logged
-  Buffer Manager -->> System: Procedure exit
   end
   end
   opt lossless_pg != empty set
@@ -130,9 +122,6 @@ sequenceDiagram
   Buffer Orch -->>- Database Service: Finish
   end
   end
-  opt headroom decreased and not warm-reboot
-  Buffer Manager ->> Buffer Manager: Recalculate shared buffer pools size and populate to ASIC
-  end
   opt speed or length updated
   Buffer Manager ->> Buffer Manager: Release profile for (speed_old, length_old)
   end
@@ -143,9 +132,9 @@ sequenceDiagram
 %cable-length-speed-update.png
 sequenceDiagram
   participant System
+  participant Log
   participant Buffer Manager
   participant Database Service
-  participant Syslog
 
   System -->>+ Buffer Manager: A port's speed or cable length updated
   Note over System, Buffer Manager: parameter (speed, cable length)
@@ -153,12 +142,21 @@ sequenceDiagram
   Database Service -->>- Buffer Manager: return
   opt headroom_type is dynamic
   Buffer Manager ->> Buffer Manager: Calculate new headroom size
-  alt new headroom size <= max legal headroom
-  Buffer Manager ->> Buffer Manager: Calculate and deploy the headroom for a port, PG tuple
+  Buffer Manager ->> Buffer Manager: Calculate the accumulative headroom size of the port
+  Buffer Manager ->> Buffer Manager: Fetch current accumulative headroom size of the port
+  opt headroom size increased
+  alt new accumulative headroom size <= max legal headroom size
+  Buffer Manager ->> Buffer Manager: Recalculate buffer pool size and populate to ASIC
   else headroom size exceeds the maxinum legal value
   Buffer Manager ->> Buffer Manager: Keep previous data in APPL_DB
-  Buffer Manager -->> Syslog: Error message should be logged
+  Buffer Manager -->> Log: Error message should be logged
+  Buffer Manager -->> System: Process exit due to error
   end
+  end
+  end
+  Buffer Manager ->> Buffer Manager: Calculate and deploy the headroom for a port, PG tuple
+  opt headroom size decreased
+  Buffer Manager ->> Buffer Manager: Recalculate buffer pool size and populate to ASIC
   end
   Buffer Manager -->>- System: Finish
 ```
@@ -192,13 +190,23 @@ sequenceDiagram
 %add-headroom-override.png
 sequenceDiagram
   participant System
+  participant Log
   participant Buffer Manager
   participant Database Service
   participant Buffer Orch
   participant SAI
 
   System -->>+ Buffer Manager: Configure static headroom on a port (profile)
-  opt profile existed (it's possible that database service notify profile creating later than buffer pg)
+  alt profile existed
+  Buffer Manager ->> Buffer Manager: Calculate the accumulative headroom size
+  Buffer Manager ->> Buffer Manager: Fetch the current headroom size
+  opt headroom size increased
+  alt headroom size exceeds the max headroom size
+  Buffer Manager -->> Log: An error message should be logged
+  Buffer Manager -->> System: Procedure exit due to error
+  end
+  Buffer Manager ->> Buffer Manager: Recalculate buffer pool size and populate to ASIC
+  end
   Buffer Manager ->> Buffer Manager: Release the current applied profile for the port
   Buffer Manager -->> Database Service: Update BUFFER_PG table
   par Notify orchagent in another thread
@@ -206,7 +214,12 @@ sequenceDiagram
   Buffer Orch -->> SAI: set_ingress_priority_group_attribute
   Buffer Orch -->>- Database Service: Finish
   end
-  Buffer Manager ->> Buffer Manager: Recalculate the shared buffer pool size
+  opt headroom size decreased
+  Buffer Manager ->> Buffer Manager: Recalculate buffer pool size and populate to ASIC
+  end
+  else profile doesn't exist (it's possible that database service notify profile creating later than buffer pg)
+  Buffer Manager -->> Log: Error message should be logged
+  Buffer Manager ->> Buffer Manager: The update item should remain in m_toSync
   end
   Buffer Manager -->>- System: Finish
 ```
@@ -215,11 +228,37 @@ sequenceDiagram
 %De-configure static headroom:
 sequenceDiagram
   participant System
+  participant Log
   participant Buffer Manager
+  participant Database Service
+  participant Buffer Orch
+  participant SAI
 
-  System -->>+ Buffer Manager: Remove the static headroom on a port
-  Buffer Manager ->> Buffer Manager: Allocate buffer profile according to port's speed and cable length
-  Buffer Manager ->> Buffer Manager: Recalculate the shared buffer pool size
+  System -->>+ Buffer Manager: DeConfigure static headroom on a port (profile)
+  alt currently it's headroom override on this port
+  Buffer Manager ->> Buffer Manager: Fetch speed, cable length and calculate the headroom size
+  Buffer Manager ->> Buffer Manager: Calculate the accumulative headroom size
+  Buffer Manager ->> Buffer Manager: Fetch the current headroom size
+  opt headroom size increased
+  alt headroom size exceeds the max headroom size
+  Buffer Manager -->> Log: An error message should be logged
+  Buffer Manager -->> System: Procedure exit due to error
+  end
+  Buffer Manager ->> Buffer Manager: Recalculate buffer pool size and populate to ASIC
+  end
+  Buffer Manager ->> Buffer Manager: Allocate a profile for the port according to its speed and cable length
+  Buffer Manager -->> Database Service: Update BUFFER_PG table
+  par Notify orchagent in another thread
+  Database Service -->>+ Buffer Orch: Notify BUFFER_PG updated
+  Buffer Orch -->> SAI: set_ingress_priority_group_attribute
+  Buffer Orch -->>- Database Service: Finish
+  end
+  opt headroom size decreased
+  Buffer Manager ->> Buffer Manager: Recalculate buffer pool size and populate to ASIC
+  end
+  else it isn't headroom override on this port
+  Buffer Manager -->> Log: Error message should be logged
+  end
   Buffer Manager -->>- System: Finish
 ```
 
@@ -228,18 +267,29 @@ sequenceDiagram
 %static-profile-updated.png
 sequenceDiagram
   participant System
+  participant Log
   participant Buffer Manager
   participant Database Service
   participant Buffer Orch
 
   System -->>+ Buffer Manager: Update static profile
-  Buffer Manager -->> Database Service: Update corresponding buffer profile in CONFIG_DB
+  opt headroom size increased
+  loop for each port who references this profile
+  Buffer Manager ->> Buffer Manager: Calculate the accumulative headroom size of the port
+  alt accumulative headroom exceeds the max value
+  Buffer Manager -->> Log: An error message should be logged
+  Buffer Manager -->> System: Procedure exit with APPL_DB untouched
+  end
+  end
+  Buffer Manager ->> Buffer Manager: Recalculate the shared buffer pool size and populate to ASIC
+  end
+  Buffer Manager -->> Database Service: Update corresponding buffer profile in APPL_DB
   par Notify orchagent in another thread
   Database Service -->>+ Buffer Orch: Buffer profile updated
   Buffer Orch -->>+ SAI: set_buffer_pool_attribute
   Buffer Orch -->>- Database Service: Finish
   end
-  opt headroom size updated
+  opt headroom size decreased
   Buffer Manager ->> Buffer Manager: Recalculate the buffer pool size and program ASIC
   end
   Buffer Manager -->>- System: Finish

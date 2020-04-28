@@ -578,14 +578,9 @@ The flow is:
 2. If `lossless PG` updated, remove the old `APPL_DB.BUFFER_PG` object related to the old `lossless PG` and create the new one.
 
    For example, if the `lossless PG` for `Ethernet0` is updated from `3-4` to `3-5`, the entry `Ethernet0|3-4` will be removed and the one `Ethernet0|3-5` will be created.
-3. Check whether need to adjust the buffer pool size in advance.
-   1. Calculate the current value of accumulative buffer that will be affected by the update and the new value of that.
-   2. Calculate the shared buffer pool size based on the new accumulative buffer size.
-   3. If the accumulative headroom buffer size increases, the shared buffer pool size should be adjusted in advance.
-4. Update the port's buffer pg and update the `APPL_DB.BUFFER_PG` table.
-5. Once BufferOrch is notifed on the `APPL_DB.BUFFER_PG` updated, it will update the related SAI object.
-6. If the accumulative headroom buffer size decreases, update shared buffer pool size.
-7. Release the `APPL_DB.BUFFER_PROFILE` referenced by old `cable length` and `speed` tuple.
+3. Update the port's buffer pg and update the `APPL_DB.BUFFER_PG` table.
+4. Once BufferOrch is notifed on the `APPL_DB.BUFFER_PG` updated, it will update the related SAI object.
+5. Release the `APPL_DB.BUFFER_PROFILE` referenced by old `cable length` and `speed` tuple.
 
 ![Flow](headroom-calculation-images/recalculate.png "Figure 1: Calculate and deploy the Headroom For a Port, PG")
 
@@ -739,14 +734,13 @@ When delete a profile, it shouldn't be referenced by any entry in `CONFIG_DB.BUF
 The command `configure interface headroom_override` is designed to enable or disable the headroom override for a certain port.
 
 ```cli
-sonic#config interface headroom_override enable <port> --profile <profile> --pg <pg-map>
+sonic#config interface headroom_override enable <port> --profile <profile>
 sonic#config interface headroom_override disable <port>
 ```
 
-The following conditions among parameters must be satisfied:
+Headroom override will be enabled on all lossless PGs configured by `configure interface lossless_pg` on the `<port>`
 
-- The profile must be defined in advance.
-- The pg-map must be configured as lossless traffic by command `configure interface lossless_pg` in advance.
+The `<profile>` must be defined in advance.
 
 ### To configure cable length
 
