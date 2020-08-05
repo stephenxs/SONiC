@@ -741,21 +741,22 @@ Therefore, headroom is calculated as the following:
 - `cell occupancy` = (100 - `small packet percentage` + `small packet percentage` * `worst case factor`) / 100
 - `kb on cable` = `cable length` / `speed of light in media` * `port speed`
 - `kb on gearbox` = `port speed` * `gearbox delay` / 8 / 1024
-- `propagation delay` = `mtu` + 2 * (`kb on cable` + `kb on gearbox`) + `mac/phy delay` + `peer response`
+- `propagation delay` = `port mtu` + 2 * (`kb on cable` + `kb on gearbox`) + `mac/phy delay` + `peer response`
 - `Xon` = `pipeline latency`
-- `Xoff` = `mtu` + `propagation delay` * `cell occupancy`
+- `Xoff` = `lossless mtu` + `propagation delay` * `cell occupancy`
 - `headroom` = `Xoff` + `Xon`
 
 The values used in the above procedure are fetched from the following table:
 
 - `cable length`: CABLE_LENGTH|\<name\>|\<port\>
 - `port speed`: PORT|\<port name\>|speed
+- `port mtu`: PORT|\<port name\>|mtu, default value is `9100`
 - `gearbox delay`: PERIPHERIAL_TABLE|\<gearbox name\>|gearbox_delay
 - `mac/phy delay`: ASIC_TABLE|\<asic name\>|mac_phy_delay
 - `peer response`: ASIC_TABLE|\<asic name\>|peer_response_time
 - `cell`: ASIC_TABLE|\<asic name\>|cell_size
 - `small packet percentage`: LOSSLESS_TRAFFIC_PATTERN|\<name\>|small_packet_percentage
-- `mtu`: LOSSLESS_TRAFFIC_PATTERN|\<name\>|mtu
+- `lossless mtu`: LOSSLESS_TRAFFIC_PATTERN|\<name\>|mtu
 
 #### Allocate a new profile
 
@@ -922,25 +923,6 @@ This can be achieved by checking whether the warm reboot is finished ahead of ca
 
 ## Command line interface
 
-### To configure lossless traffic on certain priority
-
-The command `configure interface lossless_pg <add|remove>` is designed to configure the priorities used for lossless traffic.
-
-```cli
-sonic#config interface lossless_pg add <port> <pg-map>
-sonic#config interface lossless_pg remove <port>
-```
-
-All the parameters are mandatory.
-
-The `pg-map` stands for the map of priorities for lossless traffic. It should be a string and in form of a bit map like `3-4`. The `-` connects the lower bound and upper bound of a range of priorities.
-
-A new range of PGs will be added on top of current lossless PGs. The new PG range must disjoint with all existing PGs.
-
-For example, currently the PG range 3-4 exist on port Ethernet4, to add PG range 4-5 will fail because it doesn't disjoint with 3-4. To add PG range 5-6 will succeed. After that both range 3-4 and 5-6 will work as lossless PG.
-
-All lossless PGs on a port must share the same profile. If existing lossless PGs references another profile which is static, the command will fail.
-
 ### To configure a static profile
 
 A static profile can be used to override the headroom size and/or dynamic_th of a port, PG.
@@ -949,11 +931,11 @@ The command `configure buffer_profile` is designed to create or destroy a static
 
 ```cli
 sonic#config buffer_profile add <name> --xon <xon> --xoff <xoff> --headroom <headroom> --dynamic_th <dynamic_th>
+sonic#config buffer_profile set <name> --xon <xon> --xoff <xoff> --headroom <headroom> --dynamic_th <dynamic_th>
 sonic#config buffer_profile remove <name>
 ```
 
 All the parameters are devided to two groups, one for headroom and one for dynamic_th. For any command at lease one group of parameters should be provided.
-
 For headroom parameters:
 
 - At lease one of `xoff` and `headroom` should be provided and the other will be optional and conducted via the formula `xon + xoff = headroom`.
@@ -963,24 +945,36 @@ All other parameters are mandatory.
 
 If only headroom parameters are provided, the `dynamic_th` will be taken from `CONFIG_DB.DEFAULT_LOSSLESS_BUFFER_PARAMETER.default_dynamic_th`.
 
-If only dynamic_th parameter is provided, the `headroom_type` will be set as `dynamic` and `xon`, `xoff` and `size` won't be set.
+If only dynamic_th parameter is provided, the `headroom_type` will be set as `dynamic` and `xon`, `xoff` and `size` won't be set. This is only used for non default dynamic_th. In this case, the profile won't be deployed to ASIC directly. It can be configured to a lossless PG and then a dynamic profile will be generated based on the port's speed, cable length, and MTU and deployed to the ASIC.
 
-When delete a profile, it shouldn't be referenced by any entry in `CONFIG_DB.BUFFER_PG`.
+The subcommand `add` is designed for adding a new buffer profile to the system.
 
-### To configure headroom override on a port or port, PG
+The subcommand `set` is designed for modifying an existing buffer profile in the system.
+For a profile with dynamically calculated headroom information, only `dynamic_th` can be modified. 
 
-The command `configure interface headroom_override` is designed to enable or disable the headroom override for a certain port.
+The subcommand `remove` is designed for removing an existing buffer profile from the system. When removing a profile, it shouldn't be referenced by any entry in `CONFIG_DB.BUFFER_PG`.
+
+### To configure lossless traffic with dynamic buffer or headroom override on certain priority
+
+The command `configure interface buffer priority-group lossless <add|remove>` is designed to configure the priorities used for lossless traffic with dynamic buffer calculation or headroom override.
 
 ```cli
-sonic#config interface headroom_override add <port> --profile <profile> --pg <lossless_pg>
-sonic#config interface headroom_override remove <port>
+sonic#config interface buffer priority-group lossless add <port> <pg-map> [static-profile]
+sonic#config interface buffer priority-group lossless set <port> <pg-map> [static-profile]
+sonic#config interface buffer priority-group lossless remove <port> [pg-map]
 ```
 
-Headroom override will be enabled on all lossless PGs desinated by `lossless_pg` on the `<port>`. If this parameter isn't provided the PG `3-4` will be used.
+The `pg-map` represents the map of priorities for lossless traffic. It should be a string and in form of a bit map like `3-4`. The `-` connects the lower bound and upper bound of a range of priorities.
 
-The `<profile>` must be defined in advance.
+The subcommand `add` is designed for adding a new lossless PG on top of current PGs. The new PG range must be disjoint with all existing PGs.
 
-All dynamically calculated lossless PGs must be removed before configure headroom override.
+For example, currently the PG range 3-4 exist on port Ethernet4, to add PG range 4-5 will fail because it isn't disjoint with 3-4. To add PG range 5-6 will succeed. After that both range 3-4 and 5-6 will work as lossless PG.
+
+The `static-profile` parameter is optional. When provided, it represents the predefined buffer profile for headroom override.
+
+The subcommand `set` is designed for modifying an existing PG from dynamic calculation to headroom override or vice versa. The `pg-map` must be an existing PG.
+
+The subcommand `remove` is designed for removing an existing PG. The `pg-map` must be an existing PG.
 
 ### To configure cable length
 
@@ -1000,12 +994,119 @@ The following command is used to configure the cable length of Ethernet0 as 10 m
 sonic#config interface cable_length Ethernet0 10m
 ```
 
-### To display the current configuration
+### To display the current buffer information
 
-The command `mmuconfig` is extended to display the current configuration.
+The command `show buffer configuration` is designed to display the current buffer configuration which is stored in config database. It displays all the content of `BUFFER_POOL` and `BUFFER_PROFILE` table in the `CONFIG_DB`.
+
+The command `show buffer state` is designed to display the current buffer state which has already deployed to ASIC. It displays all the content of `BUFFER_POOL` and `BUFFER_PROFILE` table in the `STATE_DB`.
 
 ```cli
-sonic#mmuconfig -l
+sonic#show buffer configuration
+sonic#show buffer state
+```
+
+Both commands share the similar format except in the output of command `show buffer configuration`:
+
+- there isn't pool size field for dynamic calculated pools
+- there isn't dynamically generated buffer profiles
+
+
+For buffer pools, the following fields are available:
+
+- `type` represents the type of the buffer pool, including `egress` and `ingress`.
+- `mode` represents the type of the buffer pool threshold, including `dynamic` and `static`.
+- `size` represents the configured size of a pool. For a dynamically calculated pool, no `size` configured.
+
+For example,
+
+```cli
+Pool: ingress_lossless_pool
+----  -------
+type  ingress
+mode  dynamic
+----  -------
+
+Pool: egress_lossless_pool
+----  --------
+type  egress
+mode  dynamic
+size  14024640
+----  --------
+
+Pool: ingress_lossy_pool
+----  -------
+type  ingress
+mode  dynamic
+----  -------
+
+Pool: egress_lossy_pool
+----  -------
+type  egress
+mode  dynamic
+----  -------
+```
+
+For buffer profiles, the following fields are available:
+
+- `xon` and `xoff`, represents the `xon` and `xoff` threshold respectively.
+- `dynamic_th`, represents the dynamic threshold.
+- `size`, represents the reserved size of the profile.
+- `pool`, represents the buffer pool.
+- `headroom_type`, represents whether the headroom information in the profile is dynamically calculated.
+
+For example,
+
+```cli
+Profile: pg_lossless_100000_5m_profile
+----------  -----------------------------------
+xon         18432
+dynamic_th  0
+xoff        30720
+pool        [BUFFER_POOL:ingress_lossless_pool]
+size        49152
+----------  -----------------------------------
+
+Profile: q_lossy_profile
+----------  -------------------------------
+dynamic_th  3
+pool        [BUFFER_POOL:egress_lossy_pool]
+size        0
+----------  -------------------------------
+
+Profile: egress_lossy_profile
+----------  -------------------------------
+dynamic_th  7
+pool        [BUFFER_POOL:egress_lossy_pool]
+size        9216
+----------  -------------------------------
+
+Profile: egress_lossless_profile
+----------  ----------------------------------
+dynamic_th  7
+pool        [BUFFER_POOL:egress_lossless_pool]
+size        0
+----------  ----------------------------------
+
+Profile: ingress_lossless_profile
+----------  -----------------------------------
+dynamic_th  7
+pool        [BUFFER_POOL:ingress_lossless_pool]
+size        0
+----------  -----------------------------------
+
+Profile: ingress_lossy_profile
+----------  --------------------------------
+dynamic_th  3
+pool        [BUFFER_POOL:ingress_lossy_pool]
+size        0
+----------  --------------------------------
+
+Profile: nondef
+-------------  -----------------------------------
+dynamic_th     1
+headroom_type  dynamic
+pool           [BUFFER_POOL|ingress_lossless_pool]
+-------------  -----------------------------------
 ```
 
 ### To clear all QoS related configuration from database
