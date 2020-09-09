@@ -23,16 +23,25 @@ To merge two ingress pools into one requires update the following entries:
   - there is only 1 profile for each pool at most and `ingress_lossy_profile`
   - `ingress_lossless_profile` are pointing to the same pool now.
 
-However, we can't update single field only of an object due to the limitation [issue #3971 redis sends unchanged field to orchagent when updating dynamic_th ](https://github.com/Azure/sonic-buildimage/issues/3971). As a result, we need to re-create the objects. As the `BUFFER_POOL` is the highest level of the dependent chain, the following objects need to be affected:
+However, we can't update single field only of an object due to the limitation [issue #3971 redis sends unchanged field to orchagent when updating dynamic_th ](https://github.com/Azure/sonic-buildimage/issues/3971). We have two options to address the limitation.
 
-- `BUFFER_POOL` table: update `ingress_lossless_pool` and `egress_lossy_pool`, and remove `ingress_lossy_pool`
-- `BUFFER_PROFILE` table: all profiles except `egress_lossless_profile`
-- `BUFFER_PG` table: all objects, because they are referencing the objects in `BUFFER_PROFILE` table
-- `BUFFER_QUEUE` table: all queue objects for lossy queue
-- `BUFFER_PORT_INGRESS_PROFILE_LIST` table: all objects
-- `BUFFER_QUEUE` and `BUFFER_PORT_EGRESS_PROFILE_LIST` table
+1. To re-create the objects. As the `BUFFER_POOL` is the highest level of the dependent chain, the following objects need to be affected:
 
-### Steps in high level
+   - `BUFFER_POOL` table: update `ingress_lossless_pool` and `egress_lossy_pool`, and remove `ingress_lossy_pool`
+   - `BUFFER_PROFILE` table: all profiles except `egress_lossless_profile`
+   - `BUFFER_PG` table: all objects, because they are referencing the objects in `BUFFER_PROFILE` table
+   - `BUFFER_QUEUE` table: all queue objects for lossy queue
+   - `BUFFER_PORT_INGRESS_PROFILE_LIST` table: all objects
+   - `BUFFER_QUEUE` and `BUFFER_PORT_EGRESS_PROFILE_LIST` table
+2. To address the limitation and then update the entries in order.
+
+Hence, we have two options for the steps. Option 1 is the steps without resolving the limitation and option 2 is the one with it.
+
+Option 2 is preferred.
+
+### Option 1
+
+#### Steps in high level
 
 In the high level, the steps should be like this:
 
@@ -54,7 +63,7 @@ Notes:
 2. If PFC storm occurs and PFC zero buffer handler is used before step 2, 6, the `BUFFER_PG` table update can be stalled, thus failing the following steps.
    Suggest to turned off during the upgrading.
 
-### Detailed steps
+#### Detailed steps
 
 1. Create a set of new objects in `BUFFER_POOL`:
     - `ingress_lossless_pool_new` for both lossless and lossy pools:
@@ -74,3 +83,31 @@ Notes:
 8. Update the BUFFER_PG and BUFFER_QUEUE with the profiles replaced with the ones created in step 7
 9. Update the BUFFER_PORT_INGRESS_PROFILE_LIST and BUFFER_PORT_EGRESS_PROFILE_LIST
 10. Remove the immediate objects.
+
+### Option 2
+
+#### Resolve the limitation
+
+The root cause of the issue is the orchagent tries modifying the SAI attributes which are create-only. So the solution is straightforward: for `SET` command, check whether the object has already been created:
+
+- if yes, skip the create-only attributes.
+- else, pass all the attributes to SAI.
+
+#### Update the objects in a specific order
+
+Limitations:
+
+1. At any time, for any pool, only one profile using that pool can be in the `BUFFER_PORT_INGRESS_PROFILE_LIST`.
+2. The `pool` attribute of a profile can not be changed. We need to create a temporary pool for lossy traffic to update its pool.
+3. The total pool size can't exceed the maximum accumulative memory.
+
+So the steps should be like this:
+
+1. Copy `ingress_lossy_profile` to a new one named `ingress_lossy_profile_temp` with pool updated to `ingress_lossless_pool`.
+2. Update `BUFFER_PG|<port>|0` with the `profile` updated to `ingress_lossy_profile_temp`.
+3. Update `BUFFER_PORT_INGRESS_PROFILE_LIST` with `ingress_lossy_profile` removed.
+4. Remove `ingress_lossy_profile` and recreate it by duplicating it from `ingress_lossy_profile_temp`.
+5. Enlarge the size of `BUFFER_POOL.ingress_lossless_pool`.
+6. Enlarge the size of `BUFFER_POOL.egress_lossy_pool`.
+7. Update `BUFFER_PG|<port>|0` with the `profile` updated to `ingress_lossy_profile`.
+8. Update other profiles.
