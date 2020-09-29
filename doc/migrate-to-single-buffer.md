@@ -111,3 +111,4 @@ So the steps should be like this:
 6. Enlarge the size of `BUFFER_POOL.egress_lossy_pool`.
 7. Update `BUFFER_PG|<port>|0` with the `profile` updated to `ingress_lossy_profile`.
 8. Update other profiles.
+9. Remove `BUFFER_POOL.ingress_lossy_pool` and `BUFFER_PROFILE.ingress_lossy_profile_temp`.

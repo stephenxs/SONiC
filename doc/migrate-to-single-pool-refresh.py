@@ -70,6 +70,7 @@ for port, pl in profile_lists.iteritems():
 
 # step 4: Remove ingress_lossy_profile and recreate it by duplicating it from ingress_lossy_profile_temp
 configdb.set_entry('BUFFER_PROFILE', 'ingress_lossy_profile', None)
+time.sleep(60)
 configdb.set_entry('BUFFER_PROFILE', 'ingress_lossy_profile', ingress_lossy_profile_temp)
 
 # step 5: Enlarge the size of BUFFER_POOL.egress_lossy_pool
@@ -93,3 +94,4 @@ for name, profile in profiles.iteritems():
 
 # step 9: Remove the lossy pool
 configdb.set_entry('BUFFER_POOL', 'ingress_lossy_pool', None)
+configdb.set_entry('BUFFER_PROFILE', 'ingress_lossy_profile_temp', None)
