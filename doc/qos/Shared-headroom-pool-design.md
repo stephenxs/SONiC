@@ -34,15 +34,10 @@ In Mellanox's platform, a dedicated shared headroom pool will be introduced for 
 Comparison of reserved buffers before and after shared headroom pool:
 
 | Current solution | Shared headroom pool |
-
 |:--------:|:-----------:|:---------------:|
-
 |reserved buffer for each port on ingress and egress side|the same|
-
 |reserved buffer for each PG, including xon and xoff|for each PG, including xon only|
-
 |reserved buffer for each queue|the same|
-
 |reserved buffer for the system|the same|
 
 ### Requirements
@@ -117,13 +112,16 @@ For the upgrading flow from `v1.0.4.1` to `v1.0.5`, the logic is if all the buff
 
 Some customers, like Microsoft, doesn't deploy the default configuration in their production switches. In this case, the db_migrator won't migrate configuration. Dedicated script needs to be provided for each of the upgrading scenarios.
 
+Currently, the script only includes the steps which merge two ingress pool into one.
+
 ##### Upgrading from 201811 to 201911
 
-A PoC script in which the ASIC registers are directly programmed without calling SDK/SAI to implement shared headroom pool can have been deployed on switches running 201811. At the time this kind of switches are updated from 201811 to 201911, the shared headroom pool should have been the default configuration. In this sense, the db_migrator will upgrade the configuration to the 201911 default one which includes the shared headroom pool support. The script just needs to update the Sh
-However, the buffer configuration will be updated to the one without shared headroom pool support when upgrading the switch to 201911. Hence, the script just needs to update the buffer configuration from 201911 default to the one with shared headroom pool supported, which includes the following adjustment:
+A PoC script in which the ASIC registers are directly programmed without calling SDK/SAI to implement shared headroom pool can have been deployed on switches running 201811. At the time this kind of switches are updated from 201811 to 201911, the shared headroom pool should have been the default configuration. In this sense, the db_migrator will upgrade the configuration to the 201911 default one which includes the shared headroom pool support. The script just needs to update the buffer configuration to the single ingress pool one.
 
-- 
+However, if the default buffer configuration in 201911 doesn't support the shared headroom pool, the script needs to do the following steps:
 
+- update the buffer configuration from 201911 default to the one with shared headroom pool supported, which includes the following adjustment
+- merge two ingress pools into one
 
 ### SAI API
 
