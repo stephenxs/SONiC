@@ -34,12 +34,16 @@ In Mellanox's platform, a dedicated shared headroom pool will be introduced for 
 Comparison of reserved buffers before and after shared headroom pool:
 
 | Current solution | Shared headroom pool |
+
 |:--------:|:-----------:|:---------------:|
-|reserved for each port on ingress and egress side|not changed|
-|reserved for each PG, including xon and xoff|for each PG, including xon only|
-||shared headroom pool|
-|reserved for each queue|not changed|
-|reserved for the system|not changed|
+
+|reserved buffer for each port on ingress and egress side|the same|
+
+|reserved buffer for each PG, including xon and xoff|for each PG, including xon only|
+
+|reserved buffer for each queue|the same|
+
+|reserved buffer for the system|the same|
 
 ### Requirements
 
@@ -90,15 +94,36 @@ In the headroom calculation algorithm, the xon, xoff and size is calculated. Ori
 No update for buffer pool size calculating because
 
 - the buffer pool is calculated based on the `size` of profiles
-- the `size` of ingress lossless profiles have updated to reflect shared headroom pool, but the logic of calculating the buffer pool isn't changed.
+- the `size` of ingress lossless profiles have been updated to reflect shared headroom pool, but the logic of calculating the buffer pool isn't changed.
 
-#### Upgrading flows
+#### Upgrading from old version via using db_migrator
 
-##### Upgrading from 201911 to 202012 with dynamic buffer calculation
+To support shared headroom pool means we will have different buffer configuration from the current one, which means a new db_version needs to be introduced.
 
-##### Upgrading from 201911 to 202012 without dynamic buffer calculation
+However, this is a bit complicatd. Currently we have the following config_db versions:
+
+- `v1.0.4`, represents the latest configuration on 201911 and master.
+- `v1.0.5`, represents the configuration for dynamic buffer calculation mode, which is only supported on master.
+
+We are going to support shared headroom pool in 201911 which means a new version needs to be inserted between `v1.0.4` and `v1.0.5`, like `v1.0.4.1`.
+
+The upgrading flow from `v1.0.4` to `v1.0.4.1` and from `v1.0.4.1` to `v1.0.5` also need to be handled.
+
+For the upgrading flow from `v1.0.4` to `v1.0.4.1`, the logic is if all the buffer configuration aligns with the default value, the system will adjust the buffer configuration with the shared headroom pool supported.
+
+For the upgrading flow from `v1.0.4.1` to `v1.0.5`, the logic is if all the buffer configuration aligns with the default value, the system will adjust the buffer configuration to the dynamic calculation one.
+
+#### Upgrading from old version via using script
+
+Some customers, like Microsoft, doesn't deploy the default configuration in their production switches. In this case, the db_migrator won't migrate configuration. Dedicated script needs to be provided for each of the upgrading scenarios.
 
 ##### Upgrading from 201811 to 201911
+
+A PoC script in which the ASIC registers are directly programmed without calling SDK/SAI to implement shared headroom pool can have been deployed on switches running 201811. At the time this kind of switches are updated from 201811 to 201911, the shared headroom pool should have been the default configuration. In this sense, the db_migrator will upgrade the configuration to the 201911 default one which includes the shared headroom pool support. The script just needs to update the Sh
+However, the buffer configuration will be updated to the one without shared headroom pool support when upgrading the switch to 201911. Hence, the script just needs to update the buffer configuration from 201911 default to the one with shared headroom pool supported, which includes the following adjustment:
+
+- 
+
 
 ### SAI API
 
@@ -131,9 +156,10 @@ N/A.
 ### Restrictions/Limitations
 
 ### Testing Requirements/Design
+
 Explain what kind of unit testing, system testing, regression testing, warmboot/fastboot testing, etc.,
 Ensure that the existing warmboot/fastboot requirements are met. For example, if the current warmboot feature expects maximum of 1 second or zero second data disruption, the same should be met even after the new feature/enhancement is implemented. Explain the same here.
-Example sub-sections for unit test cases and system test cases are given below. 
+Example sub-sections for unit test cases and system test cases are given below.
 
 #### Unit Test cases  
 
