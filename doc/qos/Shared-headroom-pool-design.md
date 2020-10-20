@@ -29,7 +29,7 @@ Currently, the shared buffer pool is calculated by subtracting reserved buffer o
 
 In the shared headroom pool solution, the xoff buffer will no longer be reserved for each PG.
 
-In Mellanox's platform, a dedicated shared headroom pool will be introduced for xoff buffer with the quantity the accumulative sizes of xoff for all PGs divided by over-subscribe ratio as its size. The size of this pool is reflected by `BUFFER_POOL|ingress_lossless_pool.xoff`.
+In Mellanox's platform, a dedicated shared headroom pool will be introduced for xoff buffer with its size being the accumulative sizes of xoff for all PGs divided by over-subscribe ratio. The size of this pool is reflected by `BUFFER_POOL|ingress_lossless_pool.xoff` and will be passed to SAI through `SAI_BUFFER_POOL_ATTR_XOFF_SIZE` attribute in `set_buffer_pool_attribute` API.
 
 Comparison of reserved buffers before and after shared headroom pool:
 
@@ -71,7 +71,7 @@ The shared headroom pool should be updated whenever the headroom of a port is up
 - The lossless priority groups of a port is updated, a new one added or an old one removed.
 - A port is shutdown/start up
 
-These are exactly the same trigger points as those triggering update buffer pool size.
+These are exactly the same trigger points as those trigger update buffer pool size.
 
 ##### Algorithm update
 
@@ -81,15 +81,23 @@ In the headroom calculation algorithm, the xon, xoff and size is calculated. Ori
 
 ###### shared headroom pool size calculating
 
-1. Fetch the `xoff` of all the PGs.
-2. Put them together and divide the sum by over subscribe ratio.
+1. For each lossless PG:
+
+   1. Fetch the profile referenced by the PG
+   2. Fetch the `xoff` from the profile.
+
+2. Put all the `xoff` together and divide the sum by over subscribe ratio.
 
 ###### buffer pool size calculating
 
-No update for buffer pool size calculating because
+No update for buffer pool size calculating because:
 
 - the buffer pool is calculated based on the `size` of profiles
 - the `size` of ingress lossless profiles have been updated to reflect shared headroom pool, but the logic of calculating the buffer pool isn't changed.
+
+#### On receiving SHARED_HEADROOM_POOL over-subscribe-ratio
+
+Trigger recalculate the shared headroom pool pool size.
 
 #### Upgrading from old version via using db_migrator
 
@@ -125,7 +133,7 @@ However, if the default buffer configuration in 201911 doesn't support the share
 
 ### SAI API
 
-N/A.
+No new SAI API or attribute is introduced.
 
 ### Configuration and management
 
@@ -143,9 +151,31 @@ By default, the over-subscribe-ratio should be 2.
 
 To configure it as 0 means disable shared headroom pool.
 
+##### To configure the shared headroom pool size
+
+The command `config buffer shared-headroom-pool size` is introduced for configuring the size of shared-headroom pool.
+
+```cli
+sonic#config buffer shared-headroom-pool size <size>
+```
+
+In case both `size` and `over-subscribe-ratio` are defined, the `over-subscribe-ration` will take affect and the `size` will be ignored.
+
 #### Config DB Enhancements
 
-N/A.
+A new table `SHARED_HEADROOM_POOL` will be introduced to represent the corresponding parameters.
+
+##### table SHARED_HEADROOM_POOL
+
+##### Schema
+
+This table contains the gearbox info of each port.
+
+```schema
+    key                     = SHARED_HEADROOM_POOL|<name>   ; the name should be in capital letters, like AZURE
+    over-subscribe-ratio    = 1*4DIGIT                      ; Optional. The over-subscribe-ratio
+    size                    = 1*8DIGIT                      ; Optional. The size of shared headroom pool.
+```
 
 ### Warmboot and Fastboot Design Impact
 
@@ -155,9 +185,12 @@ N/A.
 
 ### Testing Requirements/Design
 
-Explain what kind of unit testing, system testing, regression testing, warmboot/fastboot testing, etc.,
-Ensure that the existing warmboot/fastboot requirements are met. For example, if the current warmboot feature expects maximum of 1 second or zero second data disruption, the same should be met even after the new feature/enhancement is implemented. Explain the same here.
-Example sub-sections for unit test cases and system test cases are given below.
+There is already a test case in the qos test for the shared headroom pool. The flow:
+
+1. fill the shared buffer and the xon part of each PG under testing by sending trig_pfc packets to each PG
+2. trigger PFC for each PG under testing by sending less than 10 packet to each PG
+3. fill the PG headroom pool by sending pkts_num_hdrm_partial packets to each PG
+4. send one more packet to trigger the ingress drop to the last PG
 
 #### Unit Test cases  
 
