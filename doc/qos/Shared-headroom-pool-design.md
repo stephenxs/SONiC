@@ -34,8 +34,10 @@ In Mellanox's platform, a dedicated shared headroom pool will be introduced for 
 - the over-subscribe ratio approach: the accumulative sizes of xoff for all PGs divided by over-subscribe ratio:
 - the congesting probability approach:
   1. specify the probability of congestion for each lossless buffer profile
-  2. put all probability * size together
+  2. put the product of all PGs together
 - the congesting factor approach: the congesting factor represents how many ports can suffer congestion at the same time at most.
+
+All the ways are configurable. The shared headroom pool won't be enabled if none of the configuration provided.
 
 We will detail these ways in the following chapters.
 
@@ -56,8 +58,10 @@ We have the following requirements:
   - As in this systems all the buffer parameters are statically configured, we need to provide additional parameters for shared headroom pool.
   - No new database items or CLI introduced.
 - Support shared headroom pool in systems with dynamic buffer
-  - The shared headroom pool should be updated whenever the headroom of a port is updated
-  - Over-subscribe ratio or congesting probability should be configurable
+  - Different way in which the shared headroom pool size is calculated should be provided and configurable, including:
+    - the Over-subscribe ratio
+    - congesting probability
+  - The shared headroom pool size should be updated whenever the headroom of a port is updated
 
 ### Architecture Design
 
@@ -281,6 +285,8 @@ The command `config buffer shared-headroom-pool congesting-probability` is intro
 sonic#config buffer shared-headroom-pool congesting-probability <probability>
 ```
 
+The default value of probability is 100%. To set it to 100% will remove the configuration.
+
 ##### To configure a profile's congesting probability
 
 The command `config buffer profile` is introduced for configuring the congesting probability of a profile. This command has already existed in dynamic buffer calculation mode. In this design we will add the argument for congesting probability.
@@ -318,4 +324,9 @@ There is already a test case in the qos test for the shared headroom pool. The f
 
 ### Open/Action items - if any
 
-In case configuration for different approaches of calculating the shared headroom pool is provided, which approach should be chozen?
+1. In case configuration for different approaches of calculating the shared headroom pool is provided, which approach should be chozen?
+2. What's the expected behavior of the congesting factor approach? Should we support it?
+
+  - which ports should we choose to calculate the shared headroom pool size?
+  - do we need to sort them? based on xoff?
+  - is it necessary to configure it based on peer device? (switch or NIC)
