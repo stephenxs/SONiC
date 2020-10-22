@@ -29,7 +29,15 @@ Currently, the shared buffer pool is calculated by subtracting reserved buffer o
 
 In the shared headroom pool solution, the xoff buffer will no longer be reserved for each PG.
 
-In Mellanox's platform, a dedicated shared headroom pool will be introduced for xoff buffer with its size being the accumulative sizes of xoff for all PGs divided by over-subscribe ratio. The size of this pool is reflected by `BUFFER_POOL|ingress_lossless_pool.xoff` and will be passed to SAI through `SAI_BUFFER_POOL_ATTR_XOFF_SIZE` attribute in `set_buffer_pool_attribute` API.
+In Mellanox's platform, a dedicated shared headroom pool will be introduced for xoff buffer. The size of this pool is reflected by `BUFFER_POOL|ingress_lossless_pool.xoff` and will be passed to SAI through `SAI_BUFFER_POOL_ATTR_XOFF_SIZE` attribute in `set_buffer_pool_attribute` API. The size can be calculated in the following ways:
+
+- the over-subscribe ratio approach: the accumulative sizes of xoff for all PGs divided by over-subscribe ratio:
+- the congesting probability approach:
+  1. specify the probability of congestion for each lossless buffer profile
+  2. put all probability * size together
+- the congesting factor approach: the congesting factor represents how many ports can suffer congestion at the same time at most.
+
+We will detail these ways in the following chapters.
 
 Comparison of reserved buffers before and after shared headroom pool:
 
@@ -49,7 +57,7 @@ We have the following requirements:
   - No new database items or CLI introduced.
 - Support shared headroom pool in systems with dynamic buffer
   - The shared headroom pool should be updated whenever the headroom of a port is updated
-  - Over-subscribe ratio should be configurable
+  - Over-subscribe ratio or congesting probability should be configurable
 
 ### Architecture Design
 
@@ -57,29 +65,103 @@ N/A.
 
 ### High-Level Design
 
-#### Support headroom pool without dynamic buffer
+All the buffer configuration is statically calculated and deployed through `CONFIG_DB` without dynamic buffer and there isn't any change regarding the flows. So in this sector we will focus on supporting shared headroom pool on top of dynamic buffer calculation except it is explicitly specified.
 
-All the buffer configuration is statically calculated and deployed through `CONFIG_DB`.
+#### Config DB Enhancements
 
-#### Support headroom pool on top of dynamic buffer calculation
+#### Table LOSSLESS_TRAFFIC_PATTERN
 
-##### Trigger shared headroom pool to be updated
+This table contains the parameters related to lossless traffic configuration. The table has existed in dynamic buffer calculation mode. In this design the `over_subscribe_ratio` and `congesting_probability` are introduced.
 
-The shared headroom pool should be updated whenever the headroom of a port is updated, including:
+##### schema
 
-- A port's speed, cable length or MTU is updated.
-- The lossless priority groups of a port is updated, a new one added or an old one removed.
-- A port is shutdown/start up
+```schema
+    key                     = LOSSLESS_TRAFFIC_PATTERN|<name>   ; Name should be in captical letters. For example, "AZURE"
+    mtu                     = 1*4DIGIT      ; Mandatory. Max transmit unit of packet of lossless traffic, like RDMA packet, in unit of kBytes.
+    small_packet_percentage = 1*3DIGIT      ; Mandatory. The percentage of small packets against all packets.
+    over_subscribe_ratio    = 1*3DIGIT      ; Optional. The over subscribe ratio for shared headroom pool. The default value is 1.
+    congesting_probability  = 1*3DIGIT      ; Optional. The default probability of congestion of a buffer profile in percentage. The default value is 100.
+```
 
-These are exactly the same trigger points as those trigger update buffer pool size.
+##### Initialization
 
-##### Algorithm update
+Typically all vendors share the identical default RoCE parameters. It should be stored in `/usr/share/sonic/templates/buffers_config.j2` which will be used to render the buffer configuration by `config qos reload`.
 
-###### headroom calculating
+***Example***
 
-In the headroom calculation algorithm, the xon, xoff and size is calculated. Originally the `size` equals `xon` + `xoff`. For supporting the shared headroom buffer, the `size` should be updated from `xon` + `xoff` to `xon`.
+```json
+    "LOSSLESS_TRAFFIC_PATTERN": {
+        "AZURE": {
+            "mtu": "1500",
+            "small_packet_percentage": "100",
+            "over_subscribe_ratio": "8",
+            "congesting_probability": "25"
+        }
+    }
+```
 
-###### shared headroom pool size calculating
+#### BUFFER_PROFILE
+
+Table `BUFFER_PROFILE` contains the profiles of headroom parameters and the proportion of free shared buffers can be utilized by a `port`, `PG` tuple on ingress side or a `port`, `queue` tuple on egress side.
+
+##### Schema
+
+Currently, there already are some fields in `BUFFER_PROFILE` table. In this design, the field `congesting_probability` is newly introduced, indicating the probability at which the PG using this profile suffers a congestion.
+
+```schema
+    key             = BUFFER_PROFILE|<name>
+    pool            = reference to BUFFER_POOL object
+    xon             = 1*6DIGIT      ; xon threshold
+    xon_offset      = 1*6DIGIT      ; xon offset
+                                    ; With this field provided, the XON packet for a PG will be generated when the memory consumed
+                                    ; by the PG drops to pool size - xon_offset or xon, which is larger.
+    xoff            = 1*6DIGIT      ; xoff threshold
+    size            = 1*6DIGIT      ; size of reserved buffer for ingress lossless
+    dynamic_th      = 1*2DIGIT      ; for dynamic pools, proportion of free pool the port, PG tuple referencing this profile can occupy
+    static_th       = 1*10DIGIT     ; similar to dynamic_th but for static pools and in unit of bytes
+    headroom_type   = "static" / "dynamic"
+                                    ; Optional. Whether the profile is dynamically calculated or user configured.
+                                    ; Default value is "static"
+    congesting_probability = 1*3DIGIT;  Optional. The probability at which the PG using this profile suffers a congestion.
+```
+
+##### Initialization
+
+The profile is configured by CLI.
+
+***Example***
+
+An example of mandatory entries on Mellanox platform:
+
+```json
+    "BUFFER_PROFILE": {
+        "non-default-congesting-probability": {
+            "pool": "[BUFFER_POOL|ingress_lossless_pool]",
+            "headroom_type": "dynamic",
+            "congesting_probability": "25"
+        },
+        "non-default-cong-prob-override": {
+            "pool": "[BUFFER_POOL|ingress_lossy_pool]",
+            "xon": "19456",
+            "xoff": "31744",
+            "size": "19456",
+            "dynamic_th": "0",
+            "congesting_probability": "25"
+        }
+    }
+```
+
+The `non-default-congesting-probability` is a buffer profile configured with congesting probability for dynamic calculating headroom. If this profile is configured on a port whose speed and cable length are 100G and 5m respectively, the a dynamic buffer profile `pg_lossless_100000_5m_cog25_profile` will be inserted to `APPL_DB.BUFFER_PROFILE_TABLE`.
+
+The `non-default-cong-prob-override` is a buffer profile configured with congesting probability for headroom override.
+
+#### Different approaches to calculating the shared headroom pool size
+
+##### Over-subscribe ratio
+
+A new parameter over-subscribe ratio is introduced into `CONFIG_DB` and can be configured through CLI.
+
+The headroom pool size is calculated in the following steps:
 
 1. For each lossless PG:
 
@@ -88,41 +170,73 @@ In the headroom calculation algorithm, the xon, xoff and size is calculated. Ori
 
 2. Put all the `xoff` together and divide the sum by over subscribe ratio.
 
-###### buffer pool size calculating
+The calculation is triggered every time a port's speed, cable length or MTU is updated or a port is shutdown or startup. These trigger points are exactly the same as those trigger shared buffer pool size calculation.
+
+##### Congesting probability
+
+The probability of congestion will be introduced in this approach, representing the probability at which a port can suffer a congestion. The shared headroom pool is calculated by multiplying the accumulative xoff and the congestion probability for each port and then putting them together.
+
+In general, the probability is determined by the peer devices the ports connected to, like the servers or peer switches. In this sense, it's possible to share the probability among physical ports and to define the probability on a per buffer profile basis. A global congesting probability can also be introduced. The priority is:
+
+- use profiles' congesting probability if it is defined
+- use global congesting probability otherwise
+- treat the congesting probability as 100% if it isn't defined neither in the profile nor global
+
+The shared headroom pool size can be calculated in the following steps:
+
+1. For each lossless `PG`, multiply the `xoff` and the `congesting probability`
+2. Put all the product together
+
+The trigger points of the calculation are the same as those in the over-subscribe-ratio approach.
+
+###### Dynamically create buffer profiles for lossless traffic with non-default congesting probability
+
+According to dynamic buffer calculation design, a new lossless buffer profile should be created every time a new tuple of speed, cable length, MTU and dynamic_th appears.
+
+Now the congesting probability should also be taken into consideration when creating a new or reusing an existing buffer profile, which means a new lossless buffer profile should be created every time a new tuple of speed, cable length, MTU, dynamic_th and congesting probability appears.
+
+The name convention of dynamically generated buffer profile should be: `pg_lossless_<speed>_<cable-length>_<mtu>_th<dynamic_th>_cog<congesting-probability>`, in which:
+
+- the `speed` and `cable-length` are madantory
+- the `mtu`, `dynamic th` and `congesting-probability` are optional and exist only if the non-default value is configured for the profile.
+
+#### Algorithm update
+
+We will describe the algorithms via which the headroom information, size of shared buffer pool and size of shared headroom pool is calculated.
+
+##### headroom calculating
+
+In the headroom calculation algorithm, the xon, xoff and size is calculated. Originally the `size` equals `xon` + `xoff`. For supporting the shared headroom buffer, the `size` should be updated from `xon` + `xoff` to `xon`.
+
+##### shared headroom pool size calculating
+
+The algorithms via which the shared headroom pool size is calculated have been described in the sector "Different approaches to calculating the shared headroom pool size".
+
+##### buffer pool size calculating
 
 No update for buffer pool size calculating because:
 
 - the buffer pool is calculated based on the `size` of profiles
 - the `size` of ingress lossless profiles have been updated to reflect shared headroom pool, but the logic of calculating the buffer pool isn't changed.
 
-#### On receiving SHARED_HEADROOM_POOL over-subscribe-ratio
-
-Trigger recalculate the shared headroom pool pool size.
-
-#### Upgrading from old version via using db_migrator
+### Upgrading from old version via using db_migrator
 
 To support shared headroom pool means we will have different buffer configuration from the current one, which means a new db_version needs to be introduced.
 
-However, this is a bit complicatd. Currently we have the following config_db versions:
+Currently we have the following config_db versions:
 
 - `v1.0.4`, represents the latest configuration on 201911 and master.
-- `v1.0.5`, represents the configuration for dynamic buffer calculation mode, which is only supported on master.
+- `v2.0.0`, represents the configuration for dynamic buffer calculation mode, which is only supported on master.
 
-We are going to support shared headroom pool in 201911 which means a new version needs to be inserted between `v1.0.4` and `v1.0.5`, like `v1.0.4.1`.
+We are going to support shared headroom pool in 201911 which means a new version needs to be inserted between the current version `1.0.4` and `2.0.0`, which is `1.0.5`.
 
-The upgrading flow from `v1.0.4` to `v1.0.4.1` and from `v1.0.4.1` to `v1.0.5` also need to be handled.
+The upgrading flow from `v1.0.4` to `v1.0.5` and from `v1.0.5` to `v2.0.0` also need to be handled.
 
-For the upgrading flow from `v1.0.4` to `v1.0.4.1`, the logic is if all the buffer configuration aligns with the default value, the system will adjust the buffer configuration with the shared headroom pool supported.
+For the upgrading flow from `v1.0.4` to `v1.0.5`, the logic is if all the buffer configuration aligns with the default value, the system will adjust the buffer configuration with the shared headroom pool supported.
 
-For the upgrading flow from `v1.0.4.1` to `v1.0.5`, the logic is if all the buffer configuration aligns with the default value, the system will adjust the buffer configuration to the dynamic calculation one.
+For the upgrading flow from `v1.0.5` to `v2.0.0`, the logic is if all the buffer configuration aligns with the default value, the system will adjust the buffer configuration to the dynamic calculation one.
 
-#### Upgrading from old version via using script
-
-Some customers, like Microsoft, doesn't deploy the default configuration in their production switches. In this case, the db_migrator won't migrate configuration. Dedicated script needs to be provided for each of the upgrading scenarios.
-
-Currently, the script only includes the steps which merge two ingress pool into one.
-
-##### Upgrading from 201811 to 201911
+#### Upgrading from 201811 to 201911
 
 A PoC script in which the ASIC registers are directly programmed without calling SDK/SAI to implement shared headroom pool can have been deployed on switches running 201811. At the time this kind of switches are updated from 201811 to 201911, the shared headroom pool should have been the default configuration. In this sense, the db_migrator will upgrade the configuration to the 201911 default one which includes the shared headroom pool support. The script just needs to update the buffer configuration to the single ingress pool one.
 
@@ -159,31 +273,41 @@ The command `config buffer shared-headroom-pool size` is introduced for configur
 sonic#config buffer shared-headroom-pool size <size>
 ```
 
-In case both `size` and `over-subscribe-ratio` are defined, the `over-subscribe-ration` will take affect and the `size` will be ignored.
+##### To configure the global congesting probability
 
-#### Config DB Enhancements
+The command `config buffer shared-headroom-pool congesting-probability` is introduced for configuring the global congesting probability.
 
-A new table `SHARED_HEADROOM_POOL` will be introduced to represent the corresponding parameters.
+```cli
+sonic#config buffer shared-headroom-pool congesting-probability <probability>
+```
 
-##### table SHARED_HEADROOM_POOL
+##### To configure a profile's congesting probability
 
-##### Schema
+The command `config buffer profile` is introduced for configuring the congesting probability of a profile. This command has already existed in dynamic buffer calculation mode. In this design we will add the argument for congesting probability.
 
-This table contains the gearbox info of each port.
-
-```schema
-    key                     = SHARED_HEADROOM_POOL|<name>   ; the name should be in capital letters, like AZURE
-    over-subscribe-ratio    = 1*4DIGIT                      ; Optional. The over-subscribe-ratio
-    size                    = 1*8DIGIT                      ; Optional. The size of shared headroom pool.
+```cli
+sonic#config buffer_profile add <name> --xon <xon> --xoff <xoff> --headroom <headroom> --dynamic_th <dynamic_th> --congesting-probability <probability>
+sonic#config buffer_profile set <name> --xon <xon> --xoff <xoff> --headroom <headroom> --dynamic_th <dynamic_th> --congesting-probability <probability>
+sonic#config buffer_profile remove <name>
 ```
 
 ### Warmboot and Fastboot Design Impact
 
-N/A.
+No extra flow required for warm reboot/fast reboot.
 
 ### Restrictions/Limitations
 
 ### Testing Requirements/Design
+
+#### Unit Test cases
+
+TBD.
+
+#### System Test cases
+
+TBD.
+
+#### RPC test cases
 
 There is already a test case in the qos test for the shared headroom pool. The flow:
 
@@ -192,8 +316,6 @@ There is already a test case in the qos test for the shared headroom pool. The f
 3. fill the PG headroom pool by sending pkts_num_hdrm_partial packets to each PG
 4. send one more packet to trigger the ingress drop to the last PG
 
-#### Unit Test cases  
-
-#### System Test cases
-
 ### Open/Action items - if any
+
+In case configuration for different approaches of calculating the shared headroom pool is provided, which approach should be chozen?
