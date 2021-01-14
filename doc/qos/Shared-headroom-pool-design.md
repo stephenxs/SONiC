@@ -73,20 +73,18 @@ All the buffer configuration is statically calculated and deployed through `CONF
 
 #### Config DB Enhancements
 
-##### Table LOSSLESS_TRAFFIC_PATTERN
+##### Table DEFAULT_LOSSLESS_BUFFER_PARAMETER
 
-This table contains the parameters related to lossless traffic configuration. The table has existed in dynamic buffer calculation mode. In this design the `over_subscribe_ratio` is introduced.
+This table contains the default parameters when generating a ingress buffer profile for ingress lossless traffic. The table has existed in dynamic buffer calculation mode. In this design the `over_subscribe_ratio` is introduced.
 
 ###### schema
 
 ```schema
-    key                     = LOSSLESS_TRAFFIC_PATTERN|<name>   ; Name should be in captical letters. For example, "AZURE"
-    mtu                     = 1*4DIGIT      ; Mandatory. Max transmit unit of packet of lossless traffic, like RDMA packet, in unit of kBytes.
-    small_packet_percentage = 1*3DIGIT      ; Mandatory. The percentage of small packets against all packets.
-    over_subscribe_ratio    = 1*3DIGIT      ; Optional. The over subscribe ratio for shared headroom pool. The default value is 1.
+    default_dynamic_th      = 1*2DIGIT              ; Default dynamic_th for dynamically generated buffer profiles
+    over_subscribe_ratio    = 1*3DIGIT              ; Optional. The over subscribe ratio for shared headroom pool. The default value is 1.
 ```
 
-This table can't be updated on-the-fly. Reloading configuration is required.
+This table can be updated on-the-fly.
 
 ###### Initialization
 
@@ -95,11 +93,10 @@ Typically all vendors share the identical default RoCE parameters. It should be 
 ***Example***
 
 ```json
-    "LOSSLESS_TRAFFIC_PATTERN": {
+    "DEFAULT_LOSSLESS_BUFFER_PARAMETER": {
         "AZURE": {
-            "mtu": "1500",
-            "small_packet_percentage": "100",
-            "over_subscribe_ratio": "8"
+            "default_dynamic_th": "0",
+            "over_subscribe_ratio": "2"
         }
     }
 ```
