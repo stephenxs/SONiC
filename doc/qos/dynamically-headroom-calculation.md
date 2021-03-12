@@ -485,7 +485,7 @@ Currently, there already are some fields in `BUFFER_PROFILE` table. In this desi
                                     ; by the PG drops to pool size - xon_offset or xon, which is larger.
     xoff            = 1*6DIGIT      ; xoff threshold
     size            = 1*6DIGIT      ; size of reserved buffer for ingress lossless
-    dynamic_th      = 1*2DIGIT      ; for dynamic pools, representing the proportion of currently available memory in the pool the PG or queue can occupy
+    dynamic_th      = 1*2DIGIT      ; for dynamic pools, representing the proportion of currently available memory in the pool which the PG or queue can occupy
     static_th       = 1*10DIGIT     ; for static pools, representing the threshold in bytes the PG or queue can occupy
     headroom_type   = "static" / "dynamic"
                                     ; Optional. Whether the profile is dynamically calculated or user configured.
@@ -615,8 +615,8 @@ Difference between `APPL_DB.BUFFER_PROFILE` and `CONFIG_DB.BUFFER_PROFILE` inclu
     xon_offset      = 1*6DIGIT      ; xon offset
     xoff            = 1*6DIGIT      ; xoff threshold
     size            = 1*6DIGIT      ; size of headroom for ingress lossless
-    dynamic_th      = 1*2DIGIT      ; for dynamic pools, representing the proportion of currently available memory in the pool the PG or queue can occupy
-    static_th       = 1*10DIGIT     ; for static pools, representing the threshold in bytes the PG or queue can occupy
+    dynamic_th      = 1*2DIGIT      ; for dynamic pools, representing the proportion of currently available memory in the pool which the PG or queue can occupy
+    static_th       = 1*10DIGIT     ; for static pools, representing the threshold in bytes which the PG or queue can occupy
 ```
 
 #### BUFFER_PG
@@ -639,7 +639,7 @@ Other buffer related tables includes `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFIL
 The following flows will be described in this section.
 
 - When a port's speed, cable length or MTU is updated, the `BUFFER_PG`, `BUFFER_PROFILE` will be updated to reflect the headroom size regarding the new speed and cable length. As the headroom size updated, `BUFFER_POOL` will be also updated accordingly.
-- When a port's admin status is updated, the `BUFFER_PG` should be removed from the `APPL_DB` and the `BUFFER_POOL` should be updated by adding the buffer released by the admin down port.
+- When a port's admin status is updated, the `BUFFER_PG` should be removed from the `APPL_DB` and the `BUFFER_POOL` should be updated by adding the buffer that has been released by the admin down port.
 - When additional lossless PGs have been configured on the switch, `BUFFER_PG` table need to be updated as well as the `BUFFER_POOL`.
 - When a static profile is configured on or removed from a port, the `BUFFER_PROFILE` and/or `BUFFER_PG` table will be updated accordingly.
 - When the over subscribe ratio is toggled, all buffer profiles for lossless traffic should be updated. The buffer pool size and the shared headroom pool size should be updated as well.
@@ -1003,7 +1003,7 @@ For headroom parameters:
 
 - `xon` is madantory.
 - If shared headroom pool is disabled:
-  - At lease one of `xoff` and `size` should be provided and the other will be optional and conducted via the formula `xon + xoff = size`.
+  - At lease one of `xoff` and `size` should be provided and the other will be optional and deduced via the formula `xon + xoff = size`.
 All other parameters are mandatory.
   - `xon` + `xoff` <= `size`; For Mellanox platform xon + xoff == size
 - else:
