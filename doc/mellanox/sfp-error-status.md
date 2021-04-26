@@ -1,4 +1,4 @@
-# Fetch SFP error status through CLI #
+# Fetch SFP error status through CLI on Mellanox platform #
 
 ## Table of Content
 
@@ -6,7 +6,7 @@
 
 ### Scope
 
-This is the high level design for the feature "fetch SFP error status through CLI".
+This is the high level design for the feature "fetch SFP error status through CLI on Mellanox platform".
 
 ### Definitions/Abbreviations
 
@@ -23,7 +23,7 @@ The purpose of this section is to give an overview of high-level design document
 The requirement:
 
 - To expose the SFP error status to CLI
-- One shot command for debugging, which means the error status should be directly polled from low lever, eg. SDK, instead of being cached in the database.
+- One shot command for debugging, which means the error status should be directly fetched from low lever, eg. SDK, instead of being cached in the database.
 - Only supported on Mellanox system. The command will be under `show platform mlnx`
 
 ### Architecture Design
@@ -38,7 +38,7 @@ CLI to call platform API directly and platform API to fetch error status by call
 
 #### Platform API
 
-A new platform API in class SFP is required for polling the error status of the SFP module.
+A new platform API in class SFP is required for fetching the error status of the SFP module.
 
 ```
 def get_error_status(self)
@@ -49,7 +49,7 @@ def get_error_status(self)
     """
 ```
 
-It calls the SDK API and translates the return code to a human-readable string. In case the SFP module isn't plugged-in, it will return "no error".
+It calls the SDK API and translates the return code to a human-readable string. In case the SFP module isn't plugged-in, it will return "OK".
 
 The possible errors are listed below:
 
@@ -80,81 +80,81 @@ If the parameter `--port` is provided, the command will display the error status
 admin@sonic:~$ show platform mlnx transceiver error-status --port Ethernet8
 Port       Error Status
 ---------  ------------------------------------
-Ethernet8  No error
+Ethernet8  OK
 
 admin@sonic:~$ show platform mlnx transceiver error-status 
 Port         Error Status
 -----------  ----------------------------------------------
-Ethernet0    No error
-Ethernet4    No error
-Ethernet8    No error
-Ethernet12   No error
-Ethernet16   No error
-Ethernet20   No error
-Ethernet24   No error
-Ethernet28   No error
-Ethernet32   No error
-Ethernet36   No error
-Ethernet40   No error
+Ethernet0    OK
+Ethernet4    OK
+Ethernet8    OK
+Ethernet12   OK
+Ethernet16   OK
+Ethernet20   OK
+Ethernet24   OK
+Ethernet28   OK
+Ethernet32   OK
+Ethernet36   OK
+Ethernet40   OK
 Ethernet44   Exceeded power bugdet
-Ethernet48   No error
-Ethernet52   No error
-Ethernet56   No error
-Ethernet60   No error
-Ethernet64   No error
-Ethernet68   No error
-Ethernet72   No error
-Ethernet76   No error
-Ethernet80   No error
-Ethernet84   No error
-Ethernet88   No error
-Ethernet92   No error
-Ethernet96   No error
-Ethernet100  No error
-Ethernet104  No error
-Ethernet108  No error
-Ethernet112  No error
-Ethernet116  No error
-Ethernet120  No error
-Ethernet124  No error
-Ethernet128  No error
-Ethernet132  No error
-Ethernet136  No error
-Ethernet140  No error
-Ethernet144  No error
-Ethernet148  No error
-Ethernet152  No error
-Ethernet156  No error
-Ethernet160  No error
-Ethernet164  No error
-Ethernet168  No error
-Ethernet172  No error
-Ethernet176  No error
-Ethernet180  No error
-Ethernet184  No error
-Ethernet188  No error
-Ethernet192  No error
-Ethernet196  No error
-Ethernet200  No error
-Ethernet204  No error
-Ethernet208  No error
-Ethernet212  No error
-Ethernet216  No error
-Ethernet220  No error
+Ethernet48   OK
+Ethernet52   OK
+Ethernet56   OK
+Ethernet60   OK
+Ethernet64   OK
+Ethernet68   OK
+Ethernet72   OK
+Ethernet76   OK
+Ethernet80   OK
+Ethernet84   OK
+Ethernet88   OK
+Ethernet92   OK
+Ethernet96   OK
+Ethernet100  OK
+Ethernet104  OK
+Ethernet108  OK
+Ethernet112  OK
+Ethernet116  OK
+Ethernet120  OK
+Ethernet124  OK
+Ethernet128  OK
+Ethernet132  OK
+Ethernet136  OK
+Ethernet140  OK
+Ethernet144  OK
+Ethernet148  OK
+Ethernet152  OK
+Ethernet156  OK
+Ethernet160  OK
+Ethernet164  OK
+Ethernet168  OK
+Ethernet172  OK
+Ethernet176  OK
+Ethernet180  OK
+Ethernet184  OK
+Ethernet188  OK
+Ethernet192  OK
+Ethernet196  OK
+Ethernet200  OK
+Ethernet204  OK
+Ethernet208  OK
+Ethernet212  OK
+Ethernet216  OK
+Ethernet220  OK
 ```
 
 ##### CLI flow
 
-The platform API is available from pmon docker but not from host. The CLI command needs to make use of `docker exec` command to call platform API in the pmon docker. It will call `python3` command with a inline python code which initializes the chassis object and then poll error status of the SPF module.
+The platform API is available from pmon docker but not from host. The CLI command needs to make use of `docker exec` command to call platform API in the pmon docker. It will call `python3` command with a inline python code which initializes the chassis object and then fetch error status of the SPF module.
 
 1. Parse the parameters
 2. If no parameters fed, generate inline python code to:
    - initialize the chassis object and all the SFP modules
-   - than call SFP.get_error_status() to poll the error status
+   - than call SFP.get_error_status() to fetch the error status
    - print the error status
    else if a specific port fed as a parameter:
    - initialize the chassis object and the SFP module corresponding to the parameter
-   - than call SFP.get_error_status() to poll the error status
+   - than call SFP.get_error_status() to fetch the error status
    - print the error status
 3. Parse the output and display to the user.
 
