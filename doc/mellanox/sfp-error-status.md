@@ -31,6 +31,7 @@ The requirement:
 CLI to call platform API directly and platform API to fetch error status by calling SDK API.
 
 - A new platform API is introduced to fetch the error code of the SPF module via using the SDK API.
+  This platform API is Mellanox-specific and won't be supported on other platforms for now. Neither will the base class definition be added into `sonic-platform-common` for it.
 - A CLI command is introduced to display the error status to the user. Since the platform API is available in pmon docker only, the CLI has to call platform API via `docker exec` and then parse the output of the platform API.
 - No database change is required.
 
