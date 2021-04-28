@@ -50,24 +50,28 @@ def get_error_status(self)
     """
 ```
 
-It calls the SDK API and translates the return code to a human-readable string. In case the SFP module isn't plugged-in, it will return "OK".
+It calls the SDK API and translates the return code to a human-readable string. In case the SFP module isn't plugged-in, it will return `OK`. In case the SDK API returns a error code not listed in the below table, it will return `Unknown error: <error code>`
 
-The possible errors are listed below:
+The possible errors codes and descriptions are listed below:
 
-- Power budget exceeded
-- Long range
-- Bus stuck
-- Bad unsupported eeprom
-- Enforce part number list
-- Unsupported cable
-- High temperature
-- Bad cable
-- PMD type not enabled
-- PCIE system power slot exceeded
+|                   |          |
+|-------------------|----------|
+| **Error code** | **Error description** |
+| 0 | Power budget exceeded |
+| 1 | Long range for non Mellanox cable or module |
+| 2 | Bus stuck (I2C data or clock shorted) |
+| 3 | Bad or unsupported eeprom |
+| 4 | Enforce part number list |
+| 5 | Unsupported cable |
+| 6 | High temperature |
+| 7 | Bad cable (module/cable is shorted) |
+| 8 | PMD type not enabled |
+| 12 | PCIE system power slot exceeded |
+| 255 | No error |
 
 #### CLI
 
-##### CLI syntax
+##### show platform mlnx transceiver error-status
 
 The command `show platform mlnx transceiver error-status` is designed to fetch and display the error status of the SFP modules. It is implemented by calling the platform API.
 
@@ -97,7 +101,7 @@ Ethernet28   OK
 Ethernet32   OK
 Ethernet36   OK
 Ethernet40   OK
-Ethernet44   Exceeded power bugdet
+Ethernet44   Power budget exceeded
 Ethernet48   OK
 Ethernet52   OK
 Ethernet56   OK
@@ -181,16 +185,17 @@ N/A
 
 ### Restrictions/Limitations
 
-### Testing Requirements/Design
-Explain what kind of unit testing, system testing, regression testing, warmboot/fastboot testing, etc.,
-Ensure that the existing warmboot/fastboot requirements are met. For example, if the current warmboot feature expects maximum of 1 second or zero second data disruption, the same should be met even after the new feature/enhancement is implemented. Explain the same here.
-Example sub-sections for unit test cases and system test cases are given below. 
+N/A
 
-#### Unit Test cases  
+### Testing Requirements/Design
+
+#### Unit Test cases
+
+We need to verify for each error code fetched from the SDK API, the platform API returns the correct description of the error
 
 #### System Test cases
 
-### Open/Action items - if any 
+N/A
+### Open/Action items
 
-	
 NOTE: All the sections and sub-sections given above are mandatory in the design document. Users can add additional sections/sub-sections if required.
