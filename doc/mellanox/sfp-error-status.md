@@ -191,7 +191,7 @@ N/A
 
 #### Unit Test cases
 
-We need to verify for each error code fetched from the SDK API, the platform API returns the correct description of the error
+1. Verify for each error code fetched from the SDK API, the platform API returns the correct description of the error
 
 #### System Test cases
 
