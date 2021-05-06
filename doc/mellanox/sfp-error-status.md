@@ -50,7 +50,11 @@ def get_error_status(self)
     """
 ```
 
-It calls the SDK API and translates the return code to a human-readable string. In case the SFP module isn't plugged-in, it will return `OK`. In case the SDK API returns a error code not listed in the below table, it will return `Unknown error: <error code>`
+It calls the SDK API and translates the return code to a human-readable string:
+
+- In case the SFP module isn't plugged-in, it will return `unplugged`.
+- In case the SDK API returns a error code not listed in the below table, it will return `Unknown error: <error code>`.
+- Otherwise, it will return the error description defined in the below table.
 
 The possible errors codes and descriptions are listed below:
 
