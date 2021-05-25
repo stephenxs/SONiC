@@ -6,7 +6,9 @@
 
 ### Scope
 
-This is the high level design for the feature "fetch SFP error status through CLI on Mellanox platform".
+This is the high level design for the feature "expose SFP error status to CLI".
+Currently, the error status will be fetched from the low level layer directly.
+In the future, we will support fetching error status from STATE_DB, which is not covered by this design.
 
 ### Definitions/Abbreviations
 
@@ -23,17 +25,18 @@ The purpose of this section is to give an overview of high-level design document
 The requirement:
 
 - To expose the SFP error status to CLI
-- One shot command for debugging, which means the error status should be directly fetched from low lever, eg. SDK, instead of being cached in the database.
-- Only supported on Mellanox system. The command will be under `show platform mlnx`
+- Debug command which
+  - Fetch the error status from the low level directly, eg. SDK.
+  - Fetch the cached from the `STATE_DB`. This will be developed in the second phase and not covered by this design for now.
+- Generic feature, supported on Mellanox system for now. The command will be under `show interface transceiver error-status`
 
 ### Architecture Design
 
-CLI to call platform API directly and platform API to fetch error status by calling SDK API.
+CLI to call platform API directly and platform API to fetch error status by calling low level APIs.
 
-- A new platform API is introduced to fetch the error code of the SPF module via using the SDK API.
-  This platform API is Mellanox-specific and won't be supported on other platforms for now. Neither will the base class definition be added into `sonic-platform-common` for it.
+- A new platform API is introduced to fetch the error code of the SPF module.
 - A CLI command is introduced to display the error status to the user. Since the platform API is available in pmon docker only, the CLI has to call platform API via `docker exec` and then parse the output of the platform API.
-- No database change is required.
+- In the feature, the existing bitmap format of SFP error event will be leveraged to store error status into `STATE_DB`.
 
 ### High-Level Design
 
@@ -46,7 +49,7 @@ def get_error_status(self)
     """
     Get error status of the SFP module
     Returns:
-        string: represent the error code
+        string: represent the error
     """
 ```
 
@@ -56,42 +59,50 @@ It calls the SDK API and translates the return code to a human-readable string:
 - In case the SDK API returns a error code not listed in the below table, it will return `Unknown error: <error code>`.
 - Otherwise, it will return the error description defined in the below table.
 
-The possible errors codes and descriptions are listed below:
+The errors are divided to two parts: generic errors and vendor specific errors.
+The description of generic errors are listed below:
+
+|                         |
+|-------------------------|
+| **Error description** |
+| Power budget exceeded |
+| Bus stuck (I2C data or clock shorted) |
+| Bad or unsupported eeprom |
+| Unsupported cable |
+| High temperature |
+| Bad cable (module/cable is shorted) |
+| Vendor specific error |
+
+Each vendor can have its own vendor specific errors.
+On Mellanox platform, there are following:
 
 |                   |          |
 |-------------------|----------|
-| **Error code** | **Error description** |
-| 0 | Power budget exceeded |
-| 1 | Long range for non Mellanox cable or module |
-| 2 | Bus stuck (I2C data or clock shorted) |
-| 3 | Bad or unsupported eeprom |
-| 4 | Enforce part number list |
-| 5 | Unsupported cable |
-| 6 | High temperature |
-| 7 | Bad cable (module/cable is shorted) |
-| 8 | PMD type not enabled |
-| 12 | PCIE system power slot exceeded |
-| 255 | No error |
+| **Error description** |
+| Long range for non Mellanox cable or module |
+| Enforce part number list |
+| PMD type not enabled |
+| PCIE system power slot exceeded |
 
 #### CLI
 
-##### show platform mlnx transceiver error-status
+##### show interface transceiver error-status
 
-The command `show platform mlnx transceiver error-status` is designed to fetch and display the error status of the SFP modules. It is implemented by calling the platform API.
-
-```
-sonic#show platform mlnx transceiver error-status --port <port_name>
-```
-
-If the parameter `--port` is provided, the command will display the error status of the port. Otherwise, it will display the error status of all the ports.
+The command `show interface transceiver error-status` is designed to fetch and display the error status of the SFP modules. It is implemented by calling the platform API.
 
 ```
-admin@sonic:~$ show platform mlnx transceiver error-status --port Ethernet8
+sonic#show interface transceiver error-status <--read-from-db> <port>
+```
+
+If the parameter `port` is provided, the command will display the error status of the port. Otherwise, it will display the error status of all the ports.
+
+```
+admin@sonic:~$ show interface transceiver error-status Ethernet8
 Port       Error Status
 ---------  ------------------------------------
 Ethernet8  OK
 
-admin@sonic:~$ show platform mlnx transceiver error-status 
+admin@sonic:~$ show interface transceiver error-status
 Port         Error Status
 -----------  ----------------------------------------------
 Ethernet0    OK
@@ -136,7 +147,7 @@ Ethernet152  OK
 Ethernet156  OK
 Ethernet160  OK
 Ethernet164  OK
-Ethernet168  OK
+Ethernet168  Unplugged
 Ethernet172  OK
 Ethernet176  OK
 Ethernet180  OK
@@ -153,6 +164,7 @@ Ethernet220  OK
 ```
 
 ##### CLI flow
+###### Fetch error status from low level directly
 
 The platform API is available from pmon docker but not from host. The CLI command needs to make use of `docker exec` command to call platform API in the pmon docker. It will call `python3` command with a inline python code which initializes the chassis object and then fetch error status of the SPF module.
 
@@ -203,3 +215,14 @@ N/A
 ### Open/Action items
 
 NOTE: All the sections and sub-sections given above are mandatory in the design document. Users can add additional sections/sub-sections if required.
+#### Proposal for the second phase: fetch the error status from the database
+
+The error status of each xSFP module have been stored into TRANSCEIVER_STATUS table as a bitmap by `xcvrd`. Each bit stands for an error code.
+To support fetching the error status from the database, we need to:
+
+1. Extend the error codes exposed to `xcvrd` from platform API. Currently, only the errors that can block the xSFP's EEPROM from being read are exposed to the `xcvrd`. We need to expose all the error codes instead.
+2. Split the error bit definition to two parts: the generic error shared among all vendors and the vendor specific errors.
+   Currently, all error bits are treated as generic. As we have vendor specific errors, we have to define error bits for vendor specific errors as well.
+   Assume the error bitmap is a 64-bit word, one solution is to define the lower part (bit 0 ~ bit 31) as generic errors and upper part (bit 32 ~ bit 63) as vendor specific errors. The bit 0 is the least significant bit.
+3. The error bitmap definition should be moved from `xcvrd` to `sonic-platform-common`.
+4. A new platform API should be introduced to map the vendor specific error bit to the error description.
