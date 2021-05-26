@@ -173,6 +173,7 @@ The platform API is available from pmon docker but not from host. The CLI comman
    - initialize the chassis object and all the SFP modules
    - than call SFP.get_error_status() to fetch the error status
    - print the error status
+
    else if a specific port fed as a parameter:
    - initialize the chassis object and the SFP module corresponding to the parameter
    - than call SFP.get_error_status() to fetch the error status
