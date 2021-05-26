@@ -13,8 +13,11 @@ In the future, we will support fetching error status from STATE_DB, which is not
 ### Definitions/Abbreviations
 
 This section covers the abbreviation if any, used in this high-level design document and its definitions.
-xcvrd: Transceiver daemon
-CLI: Command line interface
+|          |              |
+|----------|--------------|
+| **Term** | **Meaning** |
+| xcvrd | Transceiver daemon |
+| CLI | Command line interface |
 
 ### Overview
 
@@ -76,8 +79,8 @@ The description of generic errors are listed below:
 Each vendor can have its own vendor specific errors.
 On Mellanox platform, there are following:
 
-|                   |          |
-|-------------------|----------|
+|                   |
+|-------------------|
 | **Error description** |
 | Long range for non Mellanox cable or module |
 | Enforce part number list |
