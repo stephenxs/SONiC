@@ -24,11 +24,18 @@ The purpose of this document is to provide a way to reclaim the buffer reserved 
 
 ### Requirements ###
 
-The requirement is to reclaim the reserved buffer allocated by the following tables for admin down ports
+The requirement is to reclaim the reserved buffer for admin down ports, including:
 
-- BUFFER_PG
-- BUFFER_QUEUE
-- BUFFER_PORT_INGRESS_PROFILE_LIST / BUFFER_PORT_EGRESS_PROFILE_LIST
+- Reserved by applying configuration by SONiC
+  - BUFFER_PG
+  - BUFFER_QUEUE
+  - BUFFER_PORT_INGRESS_PROFILE_LIST / BUFFER_PORT_EGRESS_PROFILE_LIST
+- Reserved by SDK/SAI, out of scope of this design
+  - management PG when the port is shutdown
+  - If the SONiC configures buffer pools
+    - The default lossy priority group configured by SDK
+    - The reserved buffer in the port buffer pool
+    - The reserved buffer in the queues configured by SDK (queue 8 ~ 15)
 
 ### Architecture Design ###
 
