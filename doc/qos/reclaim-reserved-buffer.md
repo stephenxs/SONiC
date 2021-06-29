@@ -15,13 +15,20 @@ This section covers the abbreviation if any, used in this high-level design docu
 ### Overview ###
 
 Shared buffer is used to absorb traffic when a switch is under congestion. The larger the buffer, the better the performance in terms of congestion handling.
-On Mellanox platforms, buffers are reserved for each port, PG and queue. The size of shared buffer pool is equal to the total memory minus the accumulative reserved buffers.
-There are some administratively down ports in user's scenario. There should not be any buffer reservied for admin down ports but there are buffers reserved for them.
+
+On Mellanox platforms, buffers are reserved for each port, PG and queue. The size of shared buffer pool is equal to the total memory minus the accumulative reserved buffers. So we would like to reduce the reserved buffer as many as possible. One way to do that is to reclaim the buffers reserved for admin down ports.
+
+There are some admin down ports in user's scenario. There should not be any buffer reserved for admin down ports but currently there are by default.
+
 The purpose of this document is to provide a way to reclaim the buffer reserved for admin down ports and then increase the shared buffer pool size.
 
 ### Requirements ###
 
-This section list out all the requirements for the HLD coverage and exemptions (not supported) if any for this design.
+The requirement is to reclaim the reserved buffer allocated by the following tables for admin down ports
+
+- BUFFER_PG
+- BUFFER_QUEUE
+- BUFFER_PORT_INGRESS_PROFILE_LIST / BUFFER_PORT_EGRESS_PROFILE_LIST
 
 ### Architecture Design ###
 
@@ -63,7 +70,7 @@ The 2nd option is preferred. Originally, we had decided to use a zero buffer pro
 
 This script is to add the reclaimed buffer for admin down ports back to the shared buffer pool.
 
-It will be called in the following scenarios:
+It will be invoked in the following scenarios:
 
 - Adjust the shared buffer pool and shared headroom pool on the fly after the ports have been admin down
 - Adjust the shared buffer pool and shared headroom pool in `db_migrator` for comparing with the default buffer configurations against the current value.
