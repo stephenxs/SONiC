@@ -124,6 +124,16 @@ Open question
 
 1. Should we migrate the buffer pool size to the one with reserved buffer for admin-down ports' reclaimed? Don't preper to doing so.
 
+#### Dynamic buffer model ####
+
+In dynamic buffer model, we need to:
+
+1. Remove `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` from `APPL_DB` when a port is admin down.
+   Readd them when a port is admin up.
+2. Adjust buffer pool calculator, taking the following into account:
+   - Don't reserve buffer in `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` table for admin down ports as buffer manager will remove them from `APPL_DB`
+   - Don't reserve buffer for management PG for admin down ports as SAI will remove them from SDK
+
 ### SAI API ###
 
 #### Reclaim priority groups ####
@@ -148,7 +158,7 @@ After this SAI API called, the reserved buffer of the queue indicated by pg_id w
 
 #### Reclaim port reserved buffers ####
 
-The SAI API `sai_port_api->set_port_attribute` is used for reclaiming reserved buffer for queues. The arguments should be the following:
+The SAI API `sai_port_api->set_port_attribute` is used for reclaiming reserved buffer for port buffer pools. The arguments should be the following:
 
     // Reclaim reserved buffer on ingress side
     attr.id = SAI_PORT_ATTR_QOS_INGRESS_BUFFER_PROFILE_LIST
@@ -184,6 +194,30 @@ N/A
 
 #### Unit Test cases ####
 
+##### Shutdown / startup a port #####
+
+Lossless PGs should be removed when a port is shutdown.
+
+1. Choose a port which is admin up to test
+2. Shutdown the port
+3. Check whether the lossless PGs have been removed from the `CONFIG_DB` and `ASIC_DB`
+4. Startup the port
+5. Check whether the lossless PGs have been readded to the `CONFIG_DB` and `ASIC_DB`
+
 #### System Test cases ####
+
+##### Shutdown / startup a port #####
+
+Lossless PGs should be removed when a port is shutdown. Sizes of shared headroom pool and shared buffer pool should be adjusted accordingly.
+
+1. Choose a port which is admin up to test
+2. Shutdown the port
+3. Check whether the lossless PGs have been removed from the `CONFIG_DB` and `ASIC_DB`
+4. Adjust the sizes of shared headroom pool and shared buffer pool
+5. Check whether the adjusted sizes are correct
+6. Startup the port
+7. Check whether the lossless PGs have been readded to the `CONFIG_DB` and `ASIC_DB`
+8. Adjust the sizes of shared headroom pool and shared buffer pool
+9. Check whether the adjusted sizes are correct
 
 ### Open/Action items - if any ###
