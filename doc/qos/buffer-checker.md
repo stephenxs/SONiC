@@ -208,7 +208,7 @@ The same logic should be applied to all items in `Shared Buffers DB Dump` sectio
 |section in sdkdump|generated dict name|index(if any)|
 |Shared Headroom Pools Settings|shared_headroom_pool|
 |Multicast Settings|Not used for now|
-|Ports Settings->"Port xxxx"->"Port Data Pools xxx"->"table x"|port_buffer_pools|port|
+|Ports Settings->"Port xxxx"->"Port Data Pools xxx"->"table x"|port_buffer_pools|port,pool|
 |Ports Settings->"Port xxxx"->"Port Data PGs xxx"->"table x"|port_pg_sdk|port,pg|
 |Ports Settings->"Port xxxx"->"Port Shared Headroom xxx"->"table x"|port_shp_sdk|port|
 |Ports Settings->"Port xxxx"->"Port Data TCs xxx"->"table x"|port_queue_sdk|port,queue|
