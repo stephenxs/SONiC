@@ -47,32 +47,29 @@ The SONiC will destroy the related priority groups, queues and port ingress / eg
 
 ##### Buffer manager to Remove lossless PGs on admin down port #####
 
-Currently, the lossless PGs are configured by default in static buffer model, which needs to be avoided.
+###### 201911 ######
 
-There are two options to address that.
+Only static buffer model is supported in 201911 branch.
 
-1. 0m-cable approach
+Currently, when a user configures cable length and speed on a port, the `buffermgr` will:
 
-   The user to configure cable length as `0m`, indicating there should not be any buffer usage on the port.
-   `buffermgr` doesn't generate lossless PGs on such port
+- Check whether the buffer profile `pg_lossless_<speed>_<cable-length>_profile` exists in `CONFIG_DB.BUFFER_PROFILE` table.
+  For example, it will check profile `pg_lossless_100000_5m_profile` if the speed and cable length of the port are 100G and 5 meters respectively.
+  If not, it will create a buffer profile item and push it into `CONFIG_DB.BUFFER_PROFILE` table. Allthe fields in the buffer profile are looked up from `pg_profile_lookup.ini`.
+  Otherwise, no operation in `CONFIG_DB.BUFFER_PROFILE` table.
+- Generate a buffer PG item for PG 3-4 as the lossless PG and insert the buffer PG into `CONFIG_DB.BUFFER_PG` table.
 
-   - pros
-     - Least code change
-   - cons
-     - Currently, `buffermgr` only records the cable length when it's changed. It depends on reloading configuration to make the change take effect.
-     - Not having original cable length in the `CONFIG_DB`
-2. Handle port admin state
+In order to reclaim the buffers reserved for an admin down port, we need to add the following handling on top of that.
 
-   The user doesn't need to take any specific action.
-   `buffermgr` to handle port admin state change:
-   - to remove lossless PGs configured on a port if its admin state is down
-   - to configure lossless PGs on a port if its admin state is up
+When a user shuts down a port, the `buffermgr` will:
 
-   - pros
-     - No action for user
-     - Admin down state is completely handled. No need to reload configuration.
-   - cons
-     - In case a user wants to do some maintaining like replacing a broken cable, he/she will shutdown the port, do maintaining, and then startup the port. `buffermgr` will remove the lossless PGs and then readd them, which is not necessary.
+- Remove lossless PGs configured on the port from `CONFIG_DB.BUFFER_PG` table.
+
+When a user starts up a port, the `buffermgr` will do the same flow as cable length and speed are configured on a port.
+
+###### 202012 ######
+
+TBD.
 
 ##### The script to update shared buffer pool size #####
 
@@ -80,8 +77,7 @@ This script is to add the reclaimed buffer for admin down ports back to the shar
 
 It will be invoked in the following scenarios:
 
-- Adjust the shared buffer pool and shared headroom pool on the fly after the ports have been admin down. This is triggered by user.
-- Adjust the shared buffer pool and shared headroom pool in `db_migrator` for comparing with the default buffer configurations against the current value.
+- Calculate the shared buffer pool and shared headroom pool in `db_migrator` for comparing with the default buffer configurations against the current value.
 
 There are two approaches to implement it.
 
