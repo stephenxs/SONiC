@@ -60,6 +60,7 @@ There are two options to address that.
      - Least code change
    - cons
      - Currently, `buffermgr` only records the cable length when it's changed. It depends on reloading configuration to make the change take effect.
+     - Not having original cable length in the `CONFIG_DB`
 2. Handle port admin state
 
    The user doesn't need to take any specific action.
@@ -70,19 +71,21 @@ There are two options to address that.
    - pros
      - No action for user
      - Admin down state is completely handled. No need to reload configuration.
+   - cons
+     - In case a user wants to do some maintaining like replacing a broken cable, he/she will shutdown the port, do maintaining, and then startup the port. `buffermgr` will remove the lossless PGs and then readd them, which is not necessary.
 
-The 2nd option is preferred. Originally, we had decided to use a zero buffer profile to reclaim the reserved buffer for admin down ports. To be consistent, we introduced 0m-cable to indicate a zero buffer profile. Later on, we realized that the zero buffer profile didn't really work and decided to use `SAI_NULL_OBJECT_ID` to reclaim the reserved buffer. The 0m-cable won't be consistent with the rest part any more.
-
-##### The script to update shared buffer pool size ###
+##### The script to update shared buffer pool size #####
 
 This script is to add the reclaimed buffer for admin down ports back to the shared buffer pool.
 
 It will be invoked in the following scenarios:
 
-- Adjust the shared buffer pool and shared headroom pool on the fly after the ports have been admin down
+- Adjust the shared buffer pool and shared headroom pool on the fly after the ports have been admin down. This is triggered by user.
 - Adjust the shared buffer pool and shared headroom pool in `db_migrator` for comparing with the default buffer configurations against the current value.
 
-Its flow is like this:
+There are two approaches to implement it.
+
+###### Add the reserved buffer size back to the default buffer pool size of the SKU/topo ######
 
 1. Fetch the default shared buffer pool sizes from the buffer templates according to the `SKU` and `topology`.
 2. For each admin down ports
@@ -90,7 +93,7 @@ Its flow is like this:
    2. Calculate the PG size, xoff size.
 3. Put the `size`s of all PGs together, getting the accumulative size
 4. Put the `xoff`s of all PGs together, getting the accumulative xoff
-5. Calculate the accumulative private headroom for preserved buffer
+5. Calculate the accumulative private headroom for reserved buffer
    - `10 kB` * `number of admin-down ports`
 6. Calculate other per port reserved buffer
    - egress reserved buffer as `egress_lossy_profile.size` * `number of admin-down ports`
@@ -98,10 +101,15 @@ Its flow is like this:
 7. Add `accumulative size` + (`accumulative xoff` - `accumulative private headroom`) / 2 + `per port egress reserved` to the shared buffer pool
 8. Subtract `accumulative xoff` / 2 from the shared headroom pool size
 
-Open questions:
+###### Calculate the shared buffer pool size from scratch ######
 
-1. Should this script be run by user or automatically?
-   Prefer to being run by user because sometimes the user can shutdown a port for a short-term maintainance. In this case, the user probably doesn't want to reclaim the reserved buffer.
+This is to calculate the shared buffer pool size from scratch. It is the same algorithm used in dynamic buffer calculation.
+
+1. Fetch all the items from `BUFFER_PG`, `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST`
+2. Calculate the accumulative reserved memory of queues, PGs and ports.
+3. Calculate the accumulative reserved `xoff` of lossless PGs.
+4. Calculate the accumulative reserved memory for egress mirror headrooms.
+5. Calculate the buffer pool size by subtracting the accumulative reserved memory from the total available memory.
 
 ##### db_migrator #####
 
@@ -198,7 +206,7 @@ N/A
 
 Lossless PGs should be removed when a port is shutdown.
 
-1. Choose a port which is admin up to test
+1. Choose an admin-up port to test
 2. Shutdown the port
 3. Check whether the lossless PGs have been removed from the `CONFIG_DB` and `ASIC_DB`
 4. Startup the port
