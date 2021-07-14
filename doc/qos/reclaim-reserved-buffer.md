@@ -54,8 +54,11 @@ Only static buffer model is supported in 201911 branch.
 Currently, when a user configures cable length and speed on a port, the `buffermgr` will:
 
 - Check whether the buffer profile `pg_lossless_<speed>_<cable-length>_profile` exists in `CONFIG_DB.BUFFER_PROFILE` table.
+  
   For example, it will check profile `pg_lossless_100000_5m_profile` if the speed and cable length of the port are 100G and 5 meters respectively.
+  
   If not, it will create a buffer profile item and push it into `CONFIG_DB.BUFFER_PROFILE` table. Allthe fields in the buffer profile are looked up from `pg_profile_lookup.ini`.
+  
   Otherwise, no operation in `CONFIG_DB.BUFFER_PROFILE` table.
 - Generate a buffer PG item for PG 3-4 as the lossless PG and insert the buffer PG into `CONFIG_DB.BUFFER_PG` table.
 
