@@ -45,61 +45,109 @@ The SONiC will destroy the related priority groups, queues and port ingress / eg
 
 In static buffer model, buffer manager is responsible for:
 
-- Create a buffer profile entry in `CONFIG_DB.BUFFER_PROFILE` table when the `speed`, `cable length` tuple occurs for the first time on a port
+- Create a buffer profile entry in `CONFIG_DB.BUFFER_PROFILE` table when the `speed`, `cable length` tuple occurs for the first time
 
   The parameters, including `xon`, `xoff`, `size`, `threshold` are looked up from `pg_profile_lookup.ini` with `speed` and `cable length` as the key.
 - Create a buffer priority-group entry in `CONFIG_DB.BUFFER_PG` table.
 
-#### Buffer manager to Remove lossless PGs on admin down port ####
+#### Enable lossless priority group on a port ####
 
-##### 201911 #####
+The user needs to configure `speed` and `cable length` for a port.
 
-Only static buffer model is supported in 201911 branch. `bufferorch` consumes buffer tables in `CONFIG_DB`. So `buffermgr` needs to operate `CONFIG_DB`.
+The system will do the following thing:
 
-###### Remove / Readd lossless PG when a port is shut down / started up ######
+- No action if the port is admin-down.
+- Buffer manager to create buffer profile and buffer priority-group and push them into `BUFFER_PROFILE` and `BUFFER_PG` table in `CONFIG_DB`.
+- SAI to set the headroom parameters of the priority group `3` and `4` according to buffer profile.
 
-Currently, when a user configures cable length and speed on a port, the `buffermgr` will:
+After the flow has been successfully executed, priority group `3` and `4` is enabled with corresponding headroom parameters (`size`, `xon`, `xoff`) on the port.
 
-- Check whether the buffer profile `pg_lossless_<speed>_<cable-length>_profile` exists in `CONFIG_DB.BUFFER_PROFILE` table.
-  
-  For example, it will check profile `pg_lossless_100000_5m_profile` if the speed and cable length of the port are 100G and 5 meters respectively.
-  
-  If not, it will create a buffer profile item and push it into `CONFIG_DB.BUFFER_PROFILE` table. Allthe fields in the buffer profile are looked up from `pg_profile_lookup.ini`.
-  
-  Otherwise, no operation in `CONFIG_DB.BUFFER_PROFILE` table.
-- Generate a buffer PG item for PG 3-4 as the lossless PG and insert the buffer PG into `CONFIG_DB.BUFFER_PG` table.
+The flow chart:
 
-In order to reclaim the buffers reserved for an admin down port, we need to add the following handling on top of that.
+![Flow](reclaim-reserved-buffer-images/normal.jpg "Figure 1: Normal flow of static buffer model")
+__Figure 1: Normal flow - how lossless priority-groups are configured on a port__
 
-When a user shuts down a port, the `buffermgr` will:
+##### What need to be done in order to support reclaiming unused buffer? #####
 
-- Remove lossless PGs configured on the port from `CONFIG_DB.BUFFER_PG` table.
+Currently, we have all flows except: testing port's admin status and skip the rest part if it's admin-down, which is the item marked with `(1)` in the flow chart.
 
-When a user starts up a port, the `buffermgr` will do the same flow as cable length and speed are configured on a port.
+#### Reclaim the buffer reserved for an unused port ####
 
-##### 202012 #####
+The user needs to:
 
-Both static and dynamic buffer model is supported in 201911 branch.
+- Set the admin status of the port to `down`
+- Remove the following entries of the port (if they exist)
 
-###### Don't create lossless PG for admin down ports ######
+  By default, the following entries will not be configured on an admin-down port. In case the user used a port and then decides to disable the port, the following entries are in the system and the user has to remove them manually.
+  - entries of admin-down ports in table `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST`
+  - lossy priority-groups of admin-down ports in table `BUFFER_PG`
+- Calculate the sizes of shared buffer pool and shared headroom pool and then reconfigure them
 
-The flow is:
+The system will:
 
-When a user configures cable length and speed on a port, the `buffermgr` will:
+- Buffer manager to remove the buffer priority-group from `BUFFER_PG` table in `CONFIG_DB` if there is one.
+- SAI to set the headroom parameters of priority group `3` and `4` to 0
+- In case there were entries of admin-down ports in table `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` which are removed:
+  - SAI to set the reserved size to 0 for egress queue
+  - SAI to set the reserved size to 0 for ingress and egress port buffer pools of the port (supported in 202012 only)
+- In case there were lossy priority group of admin-down ports in table `BUFFER_PG` which is removed:
+  - SAI to set the headroom size to 0
+- SAI to set the buffer pool size and shared headroom pool size
 
-- Check whether the port is admin down.
+The flow chart:
 
-  Exit if yes. No buffer PG will be created on an admin down port.
-- Check whether the buffer profile `pg_lossless_<speed>_<cable-length>_profile` exists in `CONFIG_DB.BUFFER_PROFILE` table.
+![Flow](reclaim-reserved-buffer-images/shutdown.jpg "Figure 2: Shutdown a port")
+__Figure 2: Shutdown a port__
+![Flow](reclaim-reserved-buffer-images/remove-queue.jpg "Figure 3: Remove buffer queue")
+__Figure 3: Remove buffer queue entries for an admin-down port__
+![Flow](reclaim-reserved-buffer-images/remove-profile-list.jpg "Figure 4: Remove buffer port profile list")
+__Figure 4: Remove buffer ingress/egress profile list entries for an admin-down port__
+![Flow](reclaim-reserved-buffer-images/recalculate-buffer-pool.jpg "Figure 5: Recalculate buffer pool and shared headroom pool sizes")
+__Figure 5: Recalculate and configure sizes of buffer pools and shared headroom pool__
+##### What need to be done in order to support reclaiming unused buffer? #####
 
-  For example, it will check profile `pg_lossless_100000_5m_profile` if the speed and cable length of the port are 100G and 5 meters respectively.
+- Handle `CONFIG_DB.BUFFER_PG` removing
 
-  If not, it will create a buffer profile item and push it into `CONFIG_DB.BUFFER_PROFILE` table. Allthe fields in the buffer profile are looked up from `pg_profile_lookup.ini`.
+  This is in figure 2
+  - Buffer manager to handle port admin down: remove buffer priority-group from the table.
+  - Buffer orch to handle `DEL` operation of the table.
+- Handle `CONFIG_DB.BUFFER_QUEUE` removing
 
-  Otherwise, no operation in `CONFIG_DB.BUFFER_PROFILE` table.
-- Generate a buffer PG item for PG 3-4 as the lossless PG and insert the buffer PG into `CONFIG_DB.BUFFER_PG` table.
+  This is in figure 3
+  - Buffer orch to handle `DEL` operation of the table.
+- Handle `CONFIG_DB.BUFFER_PORT_INGRESS_PROFILE_LIST` and `CONFIG_DB.BUFFER_PORT_EGRESS_PROFILE_LIST` table. (Supported in 202012)
 
-This approach maintains a static sementics.
+  This is in figure 4
+  - Buffer orch to handle `DEL` operation of the tables
+  - SAI to handle list containing `SAI_OBJECT_ID_NULL` in `SAI_PORT_ATTR_QOS_INGRESS_BUFFER_PROFILE_LIST` and `SAI_PORT_ATTR_QOS_EGRESS_BUFFER_PROFILE_LIST` attributes in `sai_port_api->set_port_attribute` call.
+
+#### Reuse an admin down port (startup a port) ####
+
+The user needs to:
+
+- Set the admin status of the port to `up`
+- Set the `speed` and `cable length` of the port if they have not been configured
+- Add the following entries for the port
+  - entries of the port in table `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST`
+  - lossy priority-groups of the port in table `BUFFER_PG`
+- Calculate the sizes of shared buffer pool and shared headroom pool and then reconfigure them
+
+The system will:
+
+- Buffer manager to create buffer profile and buffer priority-group and push them into `BUFFER_PROFILE` and `BUFFER_PG` table in `CONFIG_DB`.
+- SAI to set the headroom parameters of the priority group `3` and `4` according to buffer profile.
+- SAI to set the reserved size of egress queue according to the buffer profile in `BUFFER_QUEUE` item.
+- SAI to set the reserved size of ingress and egress port buffer pools of the port according to the buffer profile list in `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` items.
+- SAI to set the headroom size of the lossless PG to pipeline latency.
+
+The flow chart of setting admin status, speed and cable length is exactly the same as Figure 1.
+
+The flows to set `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` are not changed compared with the current system.
+##### What need to be done in order to support reclaiming unused buffer? #####
+
+We need to handle port's admin status in buffer manager. This has been described in Figure 1.
+
+### Database migrator ###
 
 #### The script to calculate the reclaimed buffer size ####
 
