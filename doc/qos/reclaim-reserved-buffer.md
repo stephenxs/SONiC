@@ -41,15 +41,22 @@ The requirement is to reclaim the reserved buffer for admin down ports, includin
 
 The SONiC will destroy the related priority groups, queues and port ingress / egress buffer profile lists for admin down ports. It will call related SAI API with `SAI_NULL_OBJECT_ID` as SAI OID. The SAI will set the reserved buffer of the objects to zero.
 
-### High-Level Design ###
+### Static buffer model ###
 
-#### Static buffer model ####
+In static buffer model, buffer manager is responsible for:
 
-##### Buffer manager to Remove lossless PGs on admin down port #####
+- Create a buffer profile entry in `CONFIG_DB.BUFFER_PROFILE` table when the `speed`, `cable length` tuple occurs for the first time on a port
 
-###### 201911 ######
+  The parameters, including `xon`, `xoff`, `size`, `threshold` are looked up from `pg_profile_lookup.ini` with `speed` and `cable length` as the key.
+- Create a buffer priority-group entry in `CONFIG_DB.BUFFER_PG` table.
 
-Only static buffer model is supported in 201911 branch.
+#### Buffer manager to Remove lossless PGs on admin down port ####
+
+##### 201911 #####
+
+Only static buffer model is supported in 201911 branch. `bufferorch` consumes buffer tables in `CONFIG_DB`. So `buffermgr` needs to operate `CONFIG_DB`.
+
+###### Remove / Readd lossless PG when a port is shut down / started up ######
 
 Currently, when a user configures cable length and speed on a port, the `buffermgr` will:
 
@@ -70,29 +77,47 @@ When a user shuts down a port, the `buffermgr` will:
 
 When a user starts up a port, the `buffermgr` will do the same flow as cable length and speed are configured on a port.
 
-###### 202012 ######
+##### 202012 #####
 
-TBD.
+Both static and dynamic buffer model is supported in 201911 branch.
 
-##### The script to update shared buffer pool size #####
+###### Don't create lossless PG for admin down ports ######
 
-This script is to add the reclaimed buffer for admin down ports back to the shared buffer pool.
+The flow is:
+
+When a user configures cable length and speed on a port, the `buffermgr` will:
+
+- Check whether the port is admin down.
+
+  Exit if yes. No buffer PG will be created on an admin down port.
+- Check whether the buffer profile `pg_lossless_<speed>_<cable-length>_profile` exists in `CONFIG_DB.BUFFER_PROFILE` table.
+
+  For example, it will check profile `pg_lossless_100000_5m_profile` if the speed and cable length of the port are 100G and 5 meters respectively.
+
+  If not, it will create a buffer profile item and push it into `CONFIG_DB.BUFFER_PROFILE` table. Allthe fields in the buffer profile are looked up from `pg_profile_lookup.ini`.
+
+  Otherwise, no operation in `CONFIG_DB.BUFFER_PROFILE` table.
+- Generate a buffer PG item for PG 3-4 as the lossless PG and insert the buffer PG into `CONFIG_DB.BUFFER_PG` table.
+
+This approach maintains a static sementics.
+
+#### The script to calculate the reclaimed buffer size ####
+
+This script is to calculate the size of buffer that has been reclaimed for admin down ports.
 
 It will be invoked in the following scenarios:
 
 - Calculate the shared buffer pool and shared headroom pool in `db_migrator` for comparing with the default buffer configurations against the current value.
 
-There are two approaches to implement it.
-
-###### Add the reserved buffer size back to the default buffer pool size of the SKU/topo ######
+The flow:
 
 1. Fetch the default shared buffer pool sizes from the buffer templates according to the `SKU` and `topology`.
 2. For each admin down ports
    1. Fetch its speed and cable length
    2. Calculate the PG size, xoff size.
-3. Put the `size`s of all PGs together, getting the accumulative size
-4. Put the `xoff`s of all PGs together, getting the accumulative xoff
-5. Calculate the accumulative private headroom for reserved buffer
+3. Put the `size`s of all PGs of admin-down ports together, getting the accumulative size
+4. Put the `xoff`s of all PGs of admin-down ports together, getting the accumulative xoff
+5. Calculate the accumulative private headroom of admin-down ports if shared headroom pool is enabled
    - `10 kB` * `number of admin-down ports`
 6. Calculate other per port reserved buffer
    - egress reserved buffer as `egress_lossy_profile.size` * `number of admin-down ports`
@@ -100,21 +125,21 @@ There are two approaches to implement it.
 7. Add `accumulative size` + (`accumulative xoff` - `accumulative private headroom`) / 2 + `per port egress reserved` to the shared buffer pool
 8. Subtract `accumulative xoff` / 2 from the shared headroom pool size
 
-###### Calculate the shared buffer pool size from scratch ######
-
-This is to calculate the shared buffer pool size from scratch. It is the same algorithm used in dynamic buffer calculation.
-
-1. Fetch all the items from `BUFFER_PG`, `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST`
-2. Calculate the accumulative reserved memory of queues, PGs and ports.
-3. Calculate the accumulative reserved `xoff` of lossless PGs.
-4. Calculate the accumulative reserved memory for egress mirror headrooms.
-5. Calculate the buffer pool size by subtracting the accumulative reserved memory from the total available memory.
-
-##### db_migrator #####
+#### db_migrator ####
 
 There is a logic in `Mellanox buffer migrator`: only the buffer configuration matches the default value in old image will it be migrated to the default value in new images.
-If the reserved buffer of admin down ports are reclaimed, the buffer configuration won't match the default one, which means the buffer configuration won't be migrated.
-This can be avoided by subtracting the reclaimed buffer to shared buffer pool size when comparing. The flow is like this:
+If the reserved buffer of admin down ports are reclaimed and added back to shared buffer pool, the buffer configuration won't match the default one, which means the buffer configuration won't be migrated. An example is like this:
+
+1. Currently, the `201911` version is used. The database version is `VERSION_1_0_6`.
+2. The user reclaims buffer from admin-down ports and adds them back to shared buffer pool, which causes the size of the shared buffer pools don't match the default one in `VERSION_1_0_6`.
+3. The user will upgrade switch to `202012` version. The database version is `VERSION_2_0_0`. `db_migrator` compares the current buffer configuration against the default one in `VERSION_1_0_6` and finds they are not same and will not migrate buffer configuration to the default values in `VERSION_2_0_0`.
+
+This can be avoided by:
+
+- subtracting the reclaimed buffer size from shared buffer pool size
+- using the difference as the default one when comparing
+
+The flow is like this:
 
 1. For each flavor in default configurations in the old version
    - Adjust the shared buffer pool size and shared headroom pool size in the default configuration
@@ -129,11 +154,13 @@ This can be avoided by subtracting the reclaimed buffer to shared buffer pool si
 
 Open question
 
-1. Should we migrate the buffer pool size to the one with reserved buffer for admin-down ports' reclaimed? Don't preper to doing so.
+1. Should we migrate the buffer pool size to the one with reserved buffer for admin-down ports' reclaimed? Don't prefer to doing so.
 
-#### Dynamic buffer model ####
+### Dynamic buffer model ###
 
-In dynamic buffer model, we need to:
+In dynamic buffer model, the buffer reserved for admin-down ports has been reclaimed execpt the reserved buffer in `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` table and management PG.
+
+So we need to add the following flow to reclaim them:
 
 1. Remove `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` from `APPL_DB` when a port is admin down.
    Readd them when a port is admin up.
