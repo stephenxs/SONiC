@@ -4,15 +4,15 @@
 
 ### Revision ###
 
-### Scope ###
+## Scope ##
 
 This section describes the scope of this high-level design document in SONiC.
 
-### Definitions/Abbreviations ###
+## Definitions/Abbreviations ##
 
 This section covers the abbreviation if any, used in this high-level design document and its definitions.
 
-### Overview ###
+## Overview ##
 
 Shared buffer is used to absorb traffic when a switch is under congestion. The larger the buffer, the better the performance in terms of congestion handling.
 
@@ -22,7 +22,7 @@ There are some admin down ports in user's scenario. There should not be any buff
 
 The purpose of this document is to provide a way to reclaim the buffer reserved for admin down ports and then increase the shared buffer pool size.
 
-### Requirements ###
+## Requirements ##
 
 The requirement is to reclaim the reserved buffer for admin down ports, including:
 
@@ -37,11 +37,11 @@ The requirement is to reclaim the reserved buffer for admin down ports, includin
     - The reserved buffer in the port buffer pool
     - The reserved buffer in the queues configured by SDK (queue 8 ~ 15)
 
-### Architecture Design ###
+## Architecture Design ##
 
 The SONiC will destroy the related priority groups, queues and port ingress / egress buffer profile lists for admin down ports. It will call related SAI API with `SAI_NULL_OBJECT_ID` as SAI OID. The SAI will set the reserved buffer of the objects to zero.
 
-### Static buffer model ###
+## Static buffer model ##
 
 In static buffer model, buffer manager is responsible for:
 
@@ -50,7 +50,47 @@ In static buffer model, buffer manager is responsible for:
   The parameters, including `xon`, `xoff`, `size`, `threshold` are looked up from `pg_profile_lookup.ini` with `speed` and `cable length` as the key.
 - Create a buffer priority-group entry in `CONFIG_DB.BUFFER_PG` table.
 
-#### Enable a port and configure buffer for it ####
+### Deploy the buffer configuration for a switch ###
+
+By default, the buffer configuration is applied during deployment of the switch. Buffer configuration will be applied on active ports only. A port with neighbor device defined in `minigraph` will be treated as an active port.
+
+To deploy the switch, the related information should be provided by user in `minigraph`. The information related to buffer configuration includes:
+
+- Device type which can be one of `ToRRouter`, `LeafRouter`, and `SpineRouter`.
+- Speed of each active port
+- Neighbor device of each active port
+- Meta data of the neighbors of active ports, like `type`, which which can be one of `server`, `ToRRouter`, `LeafRouter`, and `SpineRouter`.
+
+The system will generate necessary items and push them into `CONFIG_DB`, which effectively configures buffer for the active ports.
+
+- `admin status` in `PORT` table
+  - `up` for active ports
+  - `down` for inactive ports
+- `speed` in `PORT` table
+- `cable length` in `CABLE_LENGTH` table
+  - `40m` for ports connected between a `LeafRouter` and a `ToRRouter`
+  - `300m` or `2000m` for ports connected between a `LeafRouter` and a `SpineRouter`
+  - `5m` otherwise
+- Determine switch's topology according to switch's device type:
+  - `ToRRouter` - t0
+  - `LeafRouter` - t1
+- Create the following items by rendering `buffer template` according to `hwsku` and `topo`
+  - Buffer pools in `BUFFER_POOL` table
+    - `ingress_lossless_pool`
+    - `ingress_lossy_pool`, only available in general SKU
+    - `egress_lossless_pool`
+    - `egress_lossy_pool`
+  - Buffer profiles in `BUFFER_PROFILE` table
+    - `ingress_lossless_profile`, for ingress lossless port buffer pool
+    - `ingress_lossy_profile`, for ingress lossy port buffer pool and priority group
+    - `egress_lossless_profile`, for egress lossless port buffer pool and queue
+    - `egress_lossy_profile`, for egress lossy port buffer pool
+    - `q_lossy_profile`, for egress lossy queue
+  - Buffer queue items in `BUFFER_QUEUE` table
+  - Buffer priority group items in `BUFFER_PG` table
+  - Buffer ingress and egress port profile list in `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` respectively.
+
+### Enable a port and configure buffer for it ###
 
 The following buffer profiles should be created before enabling a port and configuring buffer for it. By default, they are defined in `buffer template` and will be applied when the `minigraph` is reloaded.
 
@@ -75,6 +115,7 @@ In case the user wants to re-enable a disabled port, he needs to configure the f
   - An item in `CONFIG_DB.BUFFER_PORT_EGRESS_PROFILE_LIST` table with the following profiles in the `profile_list`
     - `BUFFER_PROFILE|egress_lossless_profile` for `egress_lossless_pool`
     - `BUFFER_PROFILE|egress_lossy_profile` for `egress_lossy_pool`
+- Recalculate the sizes of shared buffer pool and shared headroom pool and configure them.
 
 After the flow has been successfully executed:
 
@@ -82,9 +123,11 @@ After the flow has been successfully executed:
 - The priority group `3-4` will be created and inserted into `BUFFER_PG` table, referencing the buffer profile.
 - Priority group `3` and `4` is enabled with corresponding headroom parameters (`headroom size`, `xon`, `xoff`) and alpha on the port.
 - Priority group `0` is enabled with pipeline latency as `headroom size`.
-- Reserved sizes and alpha for queue and port ingress/egress buffer pool are set according to the buffer profile referenced by the corresponding buffer tables.
+- Reserved sizes and alpha of queue and port ingress/egress buffer pool are set according to the buffer profile referenced by the corresponding buffer tables.
+- Headroom size of management priority group of the port is set to default value.
+- Sizes of shared buffer pool and shared headroom pool are set according to configuration.
 
-##### The flow to handle `speed`, `cable length` and `admin status` of the port #####
+#### The flow to handle `speed`, `cable length` and `admin status` of the port ####
 
 In the flow, buffer manager testing port's admin status and skipping the rest part if it's admin-down, which is the green area in the flow chart, needs to be implemented.
 
@@ -92,27 +135,27 @@ All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/normal.jpg "Figure: Normal flow of static buffer model")
 
-##### The flow to handle `BUFFER_QUEUE` table add entry #####
+#### The flow to handle `BUFFER_QUEUE` table add entry ####
 
 This is an existing flow. No code change is required.
 
 ![Flow](reclaim-reserved-buffer-images/create-queue.jpg "Figure: create queue")
 
-##### The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST` table add entry #####
+#### The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST` table add entry ####
 
 This is an existing flow. No code change is required.
 
 ![Flow](reclaim-reserved-buffer-images/create-port-profile-list.jpg "Figure: create port profile list")
 
-##### The flow to set port's management priority-group to default value #####
+#### The flow to set port's management priority-group to default value ####
 
-In the flow, SAI setting headroom size of management priority-group to the defaule value, which is the green area in the flow chart, needs to be implemented.
+In the flow, SAI setting headroom size of management priority-group to the defaule value, which is the blue area in the flow chart, needs to be implemented.
 
 All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/startup-sai.jpg "Figure: Startup flow related to SAI")
 
-#### Disable a port and reclaim the buffer reserved for the port ####
+### Disable a port and reclaim the buffer reserved for the port ###
 
 The user needs to:
 
@@ -127,12 +170,12 @@ The user needs to:
 After the flow has been successfully executed:
 
 - The entry of lossless priority-group `3-4` of the port is removed from `BUFFER_PG` table in `CONFIG_DB`
-- Reserved size and headroom size of priority group `0`, `3` and `4` is set to zero.
-- Reserved size of queues and port buffer pools of the port are set to zero.
+- Reserved size and headroom size of port's priority group `0`, `3` and `4` are zero.
+- Reserved size of queues and port buffer pools of the port are zero.
 - Sizes of shared buffer pool and shared headroom pool are updated accordingly.
-- The headroom size of port's management priority-group is set to zero.
+- Reserved size and headroom size of port's management priority-group is zero.
 
-##### The flow to handle admin status change of the port #####
+#### The flow to handle admin status change of the port ####
 
 In the flow, buffer manager handling port admin status change, which is the green area in the flow chart, needs to be implemented.
 
@@ -140,7 +183,7 @@ All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/shutdown.jpg "Figure: Shutdown a port")
 
-##### The flow to handle `BUFFER_QUEUE` removing #####
+#### The flow to handle `BUFFER_QUEUE` removing ####
 
 In the above flow:
 
@@ -151,31 +194,38 @@ In the above flow:
 
 ![Flow](reclaim-reserved-buffer-images/remove-queue.jpg "Figure: Remove buffer queue")
 
-##### The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` #####
+#### The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` ####
 
 ![Flow](reclaim-reserved-buffer-images/remove-profile-list.jpg "Figure: Remove buffer port profile list")
 
 This is a new flow which needs to be implemented.
 
-##### The flow to handle sizes of buffer pools and shared headroom pool #####
+#### The flow to handle sizes of buffer pools and shared headroom pool ####
 
 ![Flow](reclaim-reserved-buffer-images/recalculate-buffer-pool.jpg "Figure: Recalculate buffer pool and shared headroom pool sizes")
 
 This is an existing flow. No code change is required.
 
-##### The flow to set port's management priority-group to 0 #####
+#### The flow to set port's management priority-group to 0 ####
 
-In the flow, SAI setting headroom size of management priority-group to zero, which is the green area in the flow chart, needs to be implemented.
+In the flow, SAI setting headroom size of management priority-group to zero, which is the blue area in the flow chart, needs to be implemented.
 
 All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/shutdown-sai.jpg "Figure: Shutdown flow related to SAI")
 
-### Database migrator ###
+### Summary: flows need to be implemented to support reclaiming reserved buffer of admin down ports ###
 
-Database migrator is introduced to 
+According to the flows described in above sections, the following flows need to be implemented:
 
-### Dynamic buffer model ###
+1. Buffer manager to test port's admin status before creating lossless priority group for the port.
+2. Buffer manager to remove port's lossless priority group once the port's admin status is changed to down.
+3. Buffer orch to handle `BUFFER_PG`, and `BUFFER_QUEUE` removing.
+4. Buffer orch to handle `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` removing.
+5. SAI to set headroom size of management priority group according to port's admin status.
+6. SAI to handle remove `SAI_PORT_ATTR_QOS_INGRESS_BUFFER_PROFILE_LIST` and `SAI_PORT_ATTR_QOS_EGRESS_BUFFER_PROFILE_LIST` attribute.
+
+## Dynamic buffer model ##
 
 In dynamic buffer model, the buffer reserved for admin-down ports has been reclaimed execpt the reserved buffer in `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` table and management PG.
 
@@ -187,9 +237,9 @@ So we need to add the following flow to reclaim them:
    - Don't reserve buffer in `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` table for admin down ports as buffer manager will remove them from `APPL_DB`
    - Don't reserve buffer for management PG for admin down ports as SAI will remove them from SDK
 
-### SAI API ###
+## SAI API ##
 
-#### Reclaim priority groups ####
+### Reclaim priority groups ###
 
 The SAI API `sai_buffer_api->set_ingress_priority_group_attribute` is used for reclaiming reservied buffer for priority groups. The arguments should be the following:
 
@@ -199,7 +249,7 @@ The SAI API `sai_buffer_api->set_ingress_priority_group_attribute` is used for r
 
 After this SAI API called, the reserved buffer of the priority group indicated by pg_id will be set to zero.
 
-#### Reclaim queues ####
+### Reclaim queues ###
 
 The SAI API `sai_queue_api->set_queue_attribute` is used for reclaiming reservied buffer for queues. The arguments should be the following:
 
@@ -209,7 +259,7 @@ The SAI API `sai_queue_api->set_queue_attribute` is used for reclaiming reservie
 
 After this SAI API called, the reserved buffer of the queue indicated by pg_id will be set to zero.
 
-#### Reclaim port reserved buffers ####
+### Reclaim port reserved buffers ###
 
 The SAI API `sai_port_api->set_port_attribute` is used for reclaiming reserved buffer for port buffer pools. The arguments should be the following:
 
@@ -225,31 +275,31 @@ The SAI API `sai_port_api->set_port_attribute` is used for reclaiming reserved b
     attr.value.objlist.count = 1;
     sai_port_api->set_port_attribute(port.m_port_id, &attr);
 
-### Configuration and management ###
+## Configuration and management ##
 
 N/A
 
-#### CLI/YANG model Enhancements ####
+### CLI/YANG model Enhancements ###
 
 N/A
 
-#### Config DB Enhancements ####
+### Config DB Enhancements ###
 
 N/A
 
-### Warmboot and Fastboot Design Impact ###
+## Warmboot and Fastboot Design Impact ##
 
 No impact on warm/fast boot.
 
-### Restrictions/Limitations ###
+## Restrictions/Limitations ##
 
 N/A
 
-### Testing Requirements/Design ###
+## Testing Requirements/Design ##
 
-#### Unit Test cases ####
+### Unit Test cases ###
 
-##### Shutdown / startup a port #####
+#### Shutdown / startup a port ####
 
 Lossless PGs should be removed when a port is shutdown.
 
@@ -259,9 +309,9 @@ Lossless PGs should be removed when a port is shutdown.
 4. Startup the port
 5. Check whether the lossless PGs have been readded to the `CONFIG_DB` and `ASIC_DB`
 
-#### System Test cases ####
+### System Test cases ###
 
-##### Shutdown / startup a port #####
+#### Shutdown / startup a port ####
 
 Lossless PGs should be removed when a port is shutdown. Sizes of shared headroom pool and shared buffer pool should be adjusted accordingly.
 
@@ -275,11 +325,21 @@ Lossless PGs should be removed when a port is shutdown. Sizes of shared headroom
 8. Adjust the sizes of shared headroom pool and shared buffer pool
 9. Check whether the adjusted sizes are correct
 
-### Open/Action items - if any ###
+## Open/Action items - if any ##
 
-#### db migrator ####
+### db migrator ###
 
-##### The script to calculate the reclaimed buffer size #####
+#### Is db migrator necessary ####
+
+Database migrator is introduced to take care of sizes in buffer pools and lossless buffer profiles changed.
+
+Originally, we would like to introduce db migrator in order to set the buffer pool sizes with reserved buffer of unused ports reclaimed when the system is migrated from an old image without reclaiming unused buffer supported to a new image with it.
+
+Meanwhile, as in the old image the reserved buffer can't be reclaimed, it doesn't make sense for an user to adjust buffer pool size in the old image.
+
+As a result, we don't need to change db migrator for this feature if we decided that it's always user's responsiblity to configure buffer pool sizes after reclaiming reserved buffer.
+
+#### The script to calculate the reclaimed buffer size ####
 
 This script is to calculate the size of buffer that has been reclaimed for admin down ports.
 
@@ -303,7 +363,7 @@ The flow:
 7. Add `accumulative size` + (`accumulative xoff` - `accumulative private headroom`) / 2 + `per port egress reserved` to the shared buffer pool
 8. Subtract `accumulative xoff` / 2 from the shared headroom pool size
 
-##### buffer migrator #####
+#### buffer migrator ####
 
 There is a logic in `Mellanox buffer migrator`: only the buffer configuration matches the default value in old image will it be migrated to the default value in new images.
 If the reserved buffer of admin down ports are reclaimed and added back to shared buffer pool, the buffer configuration won't match the default one, which means the buffer configuration won't be migrated. An example is like this:
