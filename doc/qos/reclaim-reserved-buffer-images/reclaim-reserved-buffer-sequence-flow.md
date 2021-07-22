@@ -1,4 +1,61 @@
 ```mermaid
+%Deploy flow
+sequenceDiagram
+    participant User
+    participant CLI
+    participant minigraph
+    participant sonic cfggen
+    participant buffer template
+    participant DATABASE
+    participant swss
+    participant SAI
+    participant SDK
+    User ->> minigraph: set device type
+    loop for each used port
+    User ->> minigraph: set speed
+    User ->> minigraph: set neighbor device name
+    User ->> minigraph: set neighbor device detail
+    User ->> minigraph: set other info (not related to buffer)
+    end
+    User ->>+ CLI: Execute "config load-minigraph"
+    CLI ->>+ sonic cfggen: load minigraph
+    sonic cfggen ->>+ minigraph: Load minigraph information
+    minigraph ->>- sonic cfggen: Return minigraph info
+    sonic cfggen ->> DATABASE: Set device type: ToRRouter, LeafRouter, or SpineRouter
+    loop for each port
+    sonic cfggen ->> DATABASE: Set port admin status to up if port is active
+    sonic cfggen ->> DATABASE: Set port speed
+    sonic cfggen ->> DATABASE: Set port's cable length according to both ends
+    end
+    sonic cfggen ->> sonic cfggen: Determine switch's topology according to its device type
+    sonic cfggen ->> buffer template: Load buffer template according to SKU and topo
+    buffer template ->> sonic cfggen: Return buffer template
+    Note over sonic cfggen, DATABASE: Generating buffer table items. All parameters are from the template
+    sonic cfggen ->> DATABASE: Generate default buffer pools
+    sonic cfggen ->> DATABASE: Generate default buffer profiles
+    loop for each active port
+    sonic cfggen ->> DATABASE: Generate BUFFER_QUEUE item
+    sonic cfggen ->> DATABASE: Generate lossy BUFFER_PG item
+    sonic cfggen ->> DATABASE: Generate BUFFER_PORT_INGRESS_PROFILE_LIST item
+    sonic cfggen ->> DATABASE: Generate BUFFER_PORT_EGRESS_PROFILE_LIST item
+    end
+    Note over sonic cfggen, DATABASE: No buffer configured for INACTIVE ports
+    sonic cfggen ->>- CLI: Finish
+    CLI ->> swss: Start swss, syncd and other services
+    CLI ->>- User: finish
+    Note over swss, SDK: Unrelated calls omitted
+    loop for each port
+    swss ->> SAI: sai_port_api->create_port
+    SAI ->> SDK: Create port
+    rect rgb(0, 128, 255)
+    loop for each buffer objects created by SDK
+    SAI ->> SDK: Set reserved size to 0
+    end
+    end
+    end
+```
+
+```mermaid
 %Normal flow
 
 sequenceDiagram
