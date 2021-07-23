@@ -595,9 +595,9 @@ To achieve it we need to do the following steps:
 3. Buffer template and SAI/SDK.
 
    Currently, profile `ingress_lossy_profile` is for the ingress lossy priority group. It contains all zero values but the size in the ASIC will be set to pipeline-latency by SAI/SDK.
-   - The profile should be redefined with non-zero values
+   - The profile should be redefined with pipeline latency as size. This is complicated because 8-lane ports have different pipeline latency from other ports. The buffer template can not distinguish them so it needs further research.
    - SAI/SDK should not set the size to pipeline-latency if the size passed by SONiC is zero.
 4. Buffer manager.
 
    It should generate priority-groups `3-4` with `ingress_lossless_zero_profile` as the profile.
-5. Database migrator is required to bridge the gap between the old and new system when a switch is upgrated.
+5. Database migrator is required to bridge the gap between the old and new system when a switch is upgraded.
