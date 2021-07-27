@@ -37,7 +37,52 @@ The requirement is to reclaim the reserved buffer for admin down ports, includin
 
 ## 6 Architecture Design ##
 
-The SONiC will destroy the related priority groups, queues and port ingress / egress buffer profile lists for admin down ports. It will call related SAI API with `SAI_NULL_OBJECT_ID` as SAI OID. The SAI will set the reserved buffer of the objects to zero.
+### 6.1 The way to set reserved buffer to zero ###
+
+Currently, the reserved size of a buffer object is set to zero when it is removed from `BUFFER_PG` or `BUFFER_QUEUE` table. A way to reclaim buffer is
+
+- SONiC to remove objects of admin-down ports from `BUFFER_PG` and `BUFFER_QUEUE` tables
+- SAI to set reserved size of buffer objects to zero on removing them.
+
+However, this creates inconsistency. Consider the following scenarios:
+
+1. System starting flow. SAI will not touch buffer objects if there is no buffer related configuration applied from SONiC, leaving them as the SDK default value. As a result, for any buffer object,
+   - There is no buffer configuration in SONiC
+   - The reserved buffer size in the ASIC is the SDK default value, some of which are not zero
+2. System started, an existing buffer object is removed. SONiC notifies SAI by setting profile to `SAI_NULL_OBJECT_ID`. SAI will set the reserved size of corresponding buffer object to zero. As a result, for the buffer object,
+   - There is no buffer configuration in SONiC
+   - The reserved buffer size in the ASIC is zero
+
+For some of the buffer objects, the SDK default reserved size is not zero. This is to make sure the system works correctly without any buffer configuration in SONiC.
+Now we have same SONiC configuration in 1 and 2 but different reserved buffer size in the ASIC.
+
+To make it clear and consistent, we need the following solution:
+
+- Introduce a series of buffer profiles whose `size` is zero and `dynamic_th` is -8. This means it will neither reserve buffer nor occupy shared buffer pool. This kind of profiles will be called as `zero buffer profile` in the following section.
+- The buffer objects will be configured to:
+  - SDK default value, if there is no buffer profile configured for the object in SONiC
+  - SDK default value, if the buffer object is removed from SONiC
+  - Zero, only if the object is configured with a zero profile
+
+To achieve it the following steps will be taken:
+
+1. Zero buffer profiles should be defined for ingress/egress and lossless/lossy traffic.
+2. Currently, there is no buffer object configured on admin-down ports. The zero profiles should be configured explicitly on admin-down ports.
+3. `ingress_lossy_profile` is for the ingress lossy priority group.
+
+   Currently, it contains all zero values but the size in the ASIC will be set to pipeline-latency by SAI/SDK. Now that zero buffer profiles have been introduced, SAI will not be able to distinguish `ingress_lossy_profile` from zero buffer profiles given that both buffer profile have `0` as their `size`.
+
+   There are two solutions to resolve it:
+   - To redefine the `ingress_lossy_profile` with pipeline latency as `size`.
+
+     This is complicated because 8-lane ports have different pipeline latency from other ports. The buffer template can not distinguish them. A standalone script is required to deploy the profile.
+   - SAI to distinguish `ingress_lossy_profile` and zero buffer profiles by using `dynamic_th`. A profile will be treated as zero profile if its `dynamic_th` is `-8`.
+4. Static buffer manager should generate priority-groups `3-4` with `ingress_lossless_zero_profile` as the profile for admin-down ports.
+5. Database migrator is required to bridge the gap between the old and new system when a switch is upgraded.
+
+This can be implemented on a per-vendor basis. For vendors with zero buffer profiles provided in buffer template, we will go this way. Otherwise, the reserved buffer will be reclaimed by removing corresponding buffer objects.
+
+This is for both static and dynamic buffer model.
 
 ## 7 Static buffer model ##
 
@@ -86,11 +131,135 @@ The system will generate necessary items and push them into `CONFIG_DB`, which e
     - `egress_lossless_profile`, for egress lossless port buffer pool and queue
     - `egress_lossy_profile`, for egress lossy port buffer pool
     - `q_lossy_profile`, for egress lossy queue
+  - Zero buffer profiles in `BUFFER_PROFILE` table
+    - `ingress_lossless_zero_profile`, zero profile for ingress lossless traffic
+    - `ingress_lossy_zero_profile`, zero profile for ingress lossy traffic
+    - `egress_lossless_zero_profile`, zero profile for egress lossless traffic
+    - `egress_lossy_zero_profile`, zero profile for egress lossy traffic
   - Buffer queue items in `BUFFER_QUEUE` table
   - Buffer priority group items in `BUFFER_PG` table
   - Buffer ingress and egress port profile list in `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` respectively.
 
-#### 7.1.1 The flow to deploy a switch ####
+#### 7.1.1 Buffer template update for zero buffer profiles ####
+
+Zero buffer profiles should be defined for ingress/egress and lossless/lossy traffic in the buffer template.
+
+```json
+{%- macro generate_zero_buffer_profiles() %}
+    {
+      "BUFFER_PROFILE" : {
+        "ingress_lossless_zero_profile" : {
+          "pool":"[BUFFER_POOL|ingress_lossless_pool]",
+          "size":"0",
+          "dynamic_th":"-8"
+        },
+        "ingress_lossy_zero_profile" : {
+          "pool":"[BUFFER_POOL|ingress_lossy_pool]",
+          "size":"0",
+          "dynamic_th":"-8"
+        },
+        "egress_lossless_zero_profile" : {
+          "pool":"[BUFFER_POOL|egress_lossless_pool]",
+          "size":"0",
+          "dynamic_th":"-8"
+        },
+        "egress_lossy_zero_profile" : {
+          "pool":"[BUFFER_POOL|egress_lossy_pool]",
+          "size":"0",
+          "dynamic_th":"-8"
+        }
+      }
+    }
+{%- endmacro %}
+```
+
+The zero profiles should be configured explicitly on admin-down ports by the following buffer template. The `port_names` should be fed with the name list of all inactive ports.
+
+```json
+{%- macro generate_zero_buffer_objects_for_inactive_ports(port_names) %}
+    "BUFFER_PG": {
+{% for port in port_names.split(',') %}
+        "{{ port }}|0": {
+            "profile" : "[BUFFER_PROFILE|egress_lossless_zero_profile]"
+        },
+{% endfor %}
+    },
+
+    "BUFFER_QUEUE": {
+{% for port in port_names.split(',') %}
+        "{{ port }}|3-4": {
+            "profile" : "[BUFFER_PROFILE|egress_lossless_zero_profile]"
+        },
+{% endfor %}
+{% for port in port_names.split(',') %}
+        "{{ port }}|0-2": {
+            "profile" : "[BUFFER_PROFILE|egress_lossy_zero_profile]"
+        },
+{% endfor %}
+{% for port in port_names.split(',') %}
+        "{{ port }}|5-6": {
+            "profile" : "[BUFFER_PROFILE|egress_lossy_zero_profile]"
+        }{% if not loop.last %},{% endif %}
+{% endfor %}
+    },
+
+"BUFFER_PORT_INGRESS_PROFILE_LIST": {
+{% for port in port_names.split(',') %}
+        "{{ port }}": {
+            "profile_list" : "[BUFFER_PROFILE|ingress_lossless_zero_profile],[BUFFER_PROFILE|ingress_lossy_zero_profile]"
+        }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    },
+    "BUFFER_PORT_EGRESS_PROFILE_LIST": {
+{% for port in port_names.split(',') %}
+        "{{ port }}": {
+            "profile_list" : "[BUFFER_PROFILE|egress_lossless_zero_profile],[BUFFER_PROFILE|egress_lossy_zero_profile]"
+        }{% if not loop.last %},{% endif %}
+
+{% endfor %}
+    }
+{%- endmacro %}
+
+```
+
+Assume port `Ethernet0` is admin down, an example is:
+
+```json
+{
+  "BUFFER_PG" : {
+    "Ethernet0|0" : {
+      "profile": "[BUFFER_PROFILE|ingress_lossy_zero_profile]"
+    },
+    "Ethernet0|3-4" : {
+      "profile": "[BUFFER_PROFILE|ingress_lossless_zero_profile]"
+    }
+  },
+  "BUFFER_QUEUE" : {
+    "Ethernet0|0-2" : {
+      "profile": "[BUFFER_PROFILE|egress_lossy_zero_profile]"
+    },
+    "Ethernet0|3-4" : {
+      "profile": "[BUFFER_PROFILE|egress_lossless_zero_profile]"
+    },
+    "Ethernet0|5-6" : {
+      "profile": "[BUFFER_PROFILE|egress_lossy_zero_profile]"
+    }
+  },
+  "BUFFER_PORT_INGRESS_PROFILE_LIST" : {
+    "Ethernet0" : {
+      "profile_list" : "[BUFFER_PROFILE|ingress_lossless_zero_profile],[BUFFER_PROFILE|ingress_lossy_zero_profile]"
+    }
+  },
+  "BUFFER_PORT_EGRESS_PROFILE_LIST" : {
+    "Ethernet0" : {
+      "profile_list" : "[BUFFER_PROFILE|egress_lossless_zero_profile],[BUFFER_PROFILE|egress_lossy_zero_profile]"
+    }
+  }
+}
+```
+
+#### 7.1.2 The flow to deploy a switch ####
 
 In the flow, SAI clearing reserved size of ingress lossy priority group, which is the blue area in the flow chart, is suggested to be implemented. Otherwise, there will be buffer oversubscription.
 
@@ -98,7 +267,15 @@ All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/deploy.jpg "Figure: Deploy flow of static buffer model")
 
-#### 7.1.2 The flow to handle `speed`, `cable length` and `admin status` of the port ####
+#### 7.1.3 The flow to create ingress lossy priority groups on platforms with 8-lane ports ####
+
+![Flow](reclaim-reserved-buffer-images/deploy-lossy-pgs.jpg "Figure: Scripts to deploy lossy priority groups")
+
+#### 7.1.4 The flow to create a ports ####
+
+![Flow](reclaim-reserved-buffer-images/system-start.jpg "Figure: System start flow of static buffer model")
+
+#### 7.1.5 The flow to handle `speed`, `cable length` and `admin status` of the port ####
 
 In the flow, buffer manager testing port's admin status and skipping the rest part if it's admin-down, which is the green area in the flow chart, needs to be implemented.
 
@@ -106,19 +283,19 @@ All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/normal.jpg "Figure: Normal flow of static buffer model")
 
-#### 7.1.3 The flow to handle `BUFFER_QUEUE` table add entry ####
+#### 7.1.6 The flow to handle `BUFFER_QUEUE` table add entry ####
 
 This is an existing flow. No code change is required.
 
 ![Flow](reclaim-reserved-buffer-images/create-queue.jpg "Figure: create queue")
 
-#### 7.1.4 The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST` table add entry ####
+#### 7.1.7 The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST` table add entry ####
 
 This is an existing flow. No code change is required.
 
 ![Flow](reclaim-reserved-buffer-images/create-port-profile-list.jpg "Figure: create port profile list")
 
-#### 7.1.5 The flow to set port's management priority-group to default value ####
+#### 7.1.8 The flow to set port's management priority-group to default value ####
 
 In the flow, SAI setting headroom size of management priority-group to the defaule value, which is the blue area in the flow chart, needs to be implemented.
 
@@ -263,15 +440,22 @@ According to the flows described in above sections, the following flows need to 
 
 ## 8 Dynamic buffer model ##
 
-In dynamic buffer model, the buffer reserved for admin-down ports has been reclaimed execpt the reserved buffer in `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` table and management PG.
+In dynamic buffer model, the buffer reserved for admin-down ports is reclaimed by removing the objects from `APPL_DB`. Currently, when a port is shut down:
 
-So we need to add the following flow to reclaim them:
+1. `buffer manager` removes the item related to the port from buffer tables from `APPL_DB`
+2. `buffer orch` notifies SAI to remove object
+3. `SAI` set reserved sizes to zero.
 
-1. Remove `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` from `APPL_DB` when a port is admin down.
-   Readd them when a port is admin up.
-2. Adjust buffer pool calculator, taking the following into account:
-   - Don't reserve buffer in `BUFFER_PORT_INGRESS_PROFILE_LIST` / `BUFFER_PORT_EGRESS_PROFILE_LIST` table for admin down ports as buffer manager will remove them from `APPL_DB`
-   - Don't reserve buffer for management PG for admin down ports as SAI will remove them from SDK
+![Flow](reclaim-reserved-buffer-images/dynamic-original.jpg "Figure: Reclaim reserved buffer in dynamic model - original flow")
+
+ Now that we have new way to do it, reserved buffer will be reclaimed:
+
+- by setting zero profile to corresponding buffer objects if the zero buffer profiles exist.
+- by removing corresponding buffer objects otherwise.
+
+The new flow is like this.
+
+![Flow](reclaim-reserved-buffer-images/dynamic-new.jpg "Figure: Reclaim reserved buffer in dynamic model - new flow")
 
 ## 9 SAI API ##
 
@@ -279,9 +463,11 @@ So we need to add the following flow to reclaim them:
 
 The SAI API `sai_buffer_api->set_ingress_priority_group_attribute` is used for reclaiming reservied buffer for priority groups. The arguments should be the following:
 
+```C
     attr.id = SAI_INGRESS_PRIORITY_GROUP_ATTR_BUFFER_PROFILE;
-    attr.value.oid = SAI_NULL_OBJECT_ID;
+    attr.value.oid = OID of zero buffer profile on ingress;
     sai_buffer_api->set_ingress_priority_group_attribute(pg_id, &attr); // pg_id is the SAI object ID of the priority group
+```
 
 After this SAI API called, the reserved buffer of the priority group indicated by pg_id will be set to zero.
 
@@ -289,9 +475,11 @@ After this SAI API called, the reserved buffer of the priority group indicated b
 
 The SAI API `sai_queue_api->set_queue_attribute` is used for reclaiming reservied buffer for queues. The arguments should be the following:
 
+```C
     attr.id = SAI_QUEUE_ATTR_BUFFER_PROFILE_ID;
-    attr.value.oid = SAI_NULL_OBJECT_ID;
+    attr.value.oid = OID of zero buffer profile on egress;
     sai_queue_api->set_queue_attribute(queue_id, &attr); // queue_id is the SAI object ID of the queue
+```
 
 After this SAI API called, the reserved buffer of the queue indicated by pg_id will be set to zero.
 
@@ -299,17 +487,19 @@ After this SAI API called, the reserved buffer of the queue indicated by pg_id w
 
 The SAI API `sai_port_api->set_port_attribute` is used for reclaiming reserved buffer for port buffer pools. The arguments should be the following:
 
+```C
     // Reclaim reserved buffer on ingress side
     attr.id = SAI_PORT_ATTR_QOS_INGRESS_BUFFER_PROFILE_LIST
-    attr.value.objlist.list = [OID of zero profile for each ingress pools]
+    attr.value.objlist.list = [OID of zero profile for each ingress pool]
     attr.value.objlist.count = 2;
     sai_port_api->set_port_attribute(port.m_port_id, &attr);
 
     // Reclaim reserved buffer on egress side
     attr.id = SAI_PORT_ATTR_QOS_EGRESS_BUFFER_PROFILE_LIST
-    attr.value.objlist.list = [OID of zero profile for each egress pools]
+    attr.value.objlist.list = [OID of zero profile for each egress pool]
     attr.value.objlist.count = 2;
     sai_port_api->set_port_attribute(port.m_port_id, &attr);
+```
 
 ### 9.4 Reclaim reserved buffers allocated by SDK ###
 
@@ -388,7 +578,15 @@ Lossless PGs should be removed when a port is shutdown. Sizes of shared headroom
 
 ### 14.2 db migrator ###
 
-#### Is db migrator necessary ####
+#### 14.2.1 Is db migrator necessary for bridging the gap between new and old image regarding the way to reclaiming buffer ####
+
+In the old image, when the buffer items are removed after a port is shut down, the SAI will set the reserved buffer size of buffer objects to 0 in SDK.
+
+In the new image, when the system starts without buffer item configured, the SAI will not touch the buffer objects, leaving them as SDK default value.
+
+Do we need db migrator to bridge the gap?
+
+#### 14.2.2 Is db migrator necessary for reserved buffer reclaiming ####
 
 Database migrator is introduced to take care of sizes in buffer pools and lossless buffer profiles changed.
 
@@ -496,108 +694,3 @@ In the flow, SAI setting headroom size of management priority-group to zero, whi
 All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/shutdown-sai.jpg "Figure: Shutdown flow related to SAI")
-
-### 14.4 The way to set reserved buffer to zero ###
-
-Currently, the reserved size of a buffer object is set to zero when it is removed from `BUFFER_PG` or `BUFFER_QUEUE` table. However, this creates inconsistency.
-
-Consider the following scenarios:
-
-1. System starting flow. SAI will leaf buffer objects untouched if there is no buffer related configuration applied from SONiC. As a result, for any buffer object,
-   - There is no buffer configuration in SONiC
-   - The reserved buffer size in the ASIC is the SDK default value
-2. System started, an existing buffer object is removed. SONiC notifies SAI by setting profile to `SAI_NULL_OBJECT_ID`. SAI will set the reserved size of corresponding buffer object to zero. As a result, for the buffer object,
-   - There is no buffer configuration in SONiC
-   - The reserved buffer size in the ASIC is zero
-
-For some of the buffer objects, the SDK default reserved size is not zero. This is to make sure the system works correctly without any buffer configuration in SONiC.
-Now we have same SONiC configuration buf different reserved buffer size in the ASIC.
-
-One way to address the inconsistency is to set the buffer configuration in the ASIC to:
-
-- SDK default value, if there is no buffer profile configured for the object in SONiC
-- SDK default value, if the buffer object is removed from SONiC
-- Zero, only if the object is configured with a profile whose size is zero (AKA zero profile)
-
-To achieve it we need to do the following steps:
-
-1. Buffer template.
-
-   Zero buffer profiles should be defined for ingress/egress and lossless/lossy traffic.
-
-   ```json
-   {
-      "BUFFER_PROFILE" : {
-        "ingress_lossless_zero_profile" : {
-          "pool":"[BUFFER_POOL|ingress_lossless_pool]",
-          "size":"0",
-          "dynamic_th":"-8"
-        },
-        "ingress_lossy_zero_profile" : {
-          "pool":"[BUFFER_POOL|ingress_lossy_pool]",
-          "size":"0",
-          "dynamic_th":"-8"
-        },
-        "egress_lossless_zero_profile" : {
-          "pool":"[BUFFER_POOL|egress_lossless_pool]",
-          "size":"0",
-          "dynamic_th":"-8"
-        },
-        "egress_lossy_zero_profile" : {
-          "pool":"[BUFFER_POOL|egress_lossy_pool]",
-          "size":"0",
-          "dynamic_th":"-8"
-        }
-      }
-   }
-   ```
-
-2. Buffer template.
-
-   Currently, there is no buffer object configured on admin-down ports. The zero profiles should be configured explicitly on admin-down ports.
-
-   Assume port `Ethernet0` is admin-down, an example is:
-
-   ```json
-   {
-     "BUFFER_PG" : {
-       "Ethernet0|0" : {
-         "profile": "[BUFFER_PROFILE|ingress_lossy_zero_profile]"
-       },
-       "Ethernet0|3-4" : {
-         "profile": "[BUFFER_PROFILE|ingress_lossless_zero_profile]"
-       }
-     },
-     "BUFFER_QUEUE" : {
-       "Ethernet0|0-2" : {
-         "profile": "[BUFFER_PROFILE|egress_lossy_zero_profile]"
-       },
-       "Ethernet0|3-4" : {
-         "profile": "[BUFFER_PROFILE|egress_lossless_zero_profile]"
-       },
-       "Ethernet0|5-6" : {
-         "profile": "[BUFFER_PROFILE|egress_lossy_zero_profile]"
-       }
-     },
-     "BUFFER_PORT_INGRESS_PROFILE_LIST" : {
-       "Ethernet0" : {
-         "profile_list" : "[BUFFER_PROFILE|ingress_lossless_zero_profile],[BUFFER_PROFILE|ingress_lossy_zero_profile]"
-       }
-     },
-     "BUFFER_PORT_EGRESS_PROFILE_LIST" : {
-       "Ethernet0" : {
-         "profile_list" : "[BUFFER_PROFILE|egress_lossless_zero_profile],[BUFFER_PROFILE|egress_lossy_zero_profile]"
-       }
-     }
-   }
-   ```
-
-3. Buffer template and SAI/SDK.
-
-   Currently, profile `ingress_lossy_profile` is for the ingress lossy priority group. It contains all zero values but the size in the ASIC will be set to pipeline-latency by SAI/SDK.
-   - The profile should be redefined with pipeline latency as size. This is complicated because 8-lane ports have different pipeline latency from other ports. The buffer template can not distinguish them so it needs further research.
-   - SAI/SDK should not set the size to pipeline-latency if the size passed by SONiC is zero.
-4. Buffer manager.
-
-   It should generate priority-groups `3-4` with `ingress_lossless_zero_profile` as the profile.
-5. Database migrator is required to bridge the gap between the old and new system when a switch is upgraded.
