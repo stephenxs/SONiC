@@ -42,26 +42,16 @@ sequenceDiagram
     sonic cfggen ->> DATABASE: Generate default buffer pool objects
     sonic cfggen ->> DATABASE: Generate default buffer profile objects
     rect rgb(255, 0, 255)
-        sonic cfggen ->> DATABASE: Generate default zero buffer profile objects
+        opt INACTIVE PORT is not empty
+            sonic cfggen ->> DATABASE: Generate default zero buffer profile objects
+        end
     end
     loop for each active port
         sonic cfggen ->> DATABASE: Generate BUFFER_QUEUE item for queue 0-2, 3-4, 5-6 for the port
         sonic cfggen ->> DATABASE: Generate BUFFER_PORT_INGRESS_PROFILE_LIST item
         sonic cfggen ->> DATABASE: Generate BUFFER_PORT_EGRESS_PROFILE_LIST item
-        rect rgb(255, 0, 0)
-            opt script to generate buffer priority-group DOES NOT exist?
-                rect rgb(255, 255, 255)
-                Note over sonic cfggen, DATABASE: Generat lossy PGs by rendering the buffer template if NO special script to generate them 
-                sonic cfggen ->> DATABASE: Generate lossy BUFFER_PG item PG 0 for the port, using normal ingress lossy buffer profile
-                end
-            end
-        end
-    end
-    rect rgb(255, 0, 0)
-        opt script to generate buffer priority-group exist?
-            Note over sonic cfggen, DATABASE: On platforms with 8-lane ports, the reserved size differs between normal port and 8-lane ports. In that case, special script is required to generate lossy buffer PGs
-            sonic cfggen ->> DATABASE: Call script to generate buffer priority-group for all active ports
-        end
+        Note over sonic cfggen, DATABASE: Generat lossy PGs by rendering the buffer template if NO special script to generate them 
+        sonic cfggen ->> DATABASE: Generate lossy BUFFER_PG item PG 0 for the port, using normal ingress lossy buffer profile
     end
     rect rgb(255, 0, 255)
         opt zero profiles exist
@@ -402,9 +392,14 @@ sequenceDiagram
     User ->> CONFIG_DB: Shutdown the port
     CONFIG_DB ->> buffer manager: Update notification
     rect rgb(255, 0, 255)
+        opt zero buffer solution supported
+            opt zero buffer profiles NOT exist
+                buffer manager ->> APPL_DB: Create zero buffer profiles
+            end
+        end
         buffer manager ->> buffer manager: Fetch the zero buffer profile on ingress side
         loop for each buffer PG object on the port
-            alt zero ingress buffer profile exists
+            alt zero buffer profiles exist
                 buffer manager ->> APPL_DB: set the profile of the PG to corresponding zero buffer profile in BUFFER_PG
             else
                 rect rgb(255, 255, 255)
@@ -414,7 +409,7 @@ sequenceDiagram
         end
         buffer manager ->> buffer manager: Fetch the zero buffer profile on egress side
         loop for each buffer queue object on the port
-            alt zero egress buffer profile exists
+            alt zero buffer profiles exist
             buffer manager ->> APPL_DB: set the profile of the queue to corresponding zero buffer profile in BUFFER_QUEUE
             else
                 rect rgb(255, 255, 255)
@@ -422,7 +417,7 @@ sequenceDiagram
                 end
             end
         end
-        opt zero ingress buffer profiles exist
+        opt zero buffer profiles exist
             alt ingress_lossy_pool exists
                 buffer manager ->> buffer manager: set ingress zero profile list to [ingress_zero_lossless_profile, ingress_zero_lossy_profile]
             else
@@ -430,7 +425,7 @@ sequenceDiagram
             end
             buffer manager ->> APPL_DB: set the profile_list of the port to egress zero buffer profile list in BUFFER_PORT_INGRESS_PROFILE_LIST
         end
-        opt zero egress buffer profiles exist
+        opt zero buffer profiles exist
             buffer manager ->> buffer manager: set egress zero profile list to [egress_zero_lossless_profile, egress_zero_lossy_profile]
             buffer manager ->> APPL_DB: set the profile_list of the port to egress zero buffer profile list in BUFFER_PORT_EGRESS_PROFILE_LIST
         end
