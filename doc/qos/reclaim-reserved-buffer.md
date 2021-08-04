@@ -30,10 +30,6 @@ The requirement is to reclaim the reserved buffer for admin down ports, includin
   - BUFFER_PG
   - BUFFER_QUEUE
   - BUFFER_PORT_INGRESS_PROFILE_LIST / BUFFER_PORT_EGRESS_PROFILE_LIST
-- Buffer reserved by SDK/SAI for objects that are not configured by SONiC, out of scope of this design but will be addressed by SAI
-  - management PG when the port is shutdown
-  - If the SONiC configures buffer pools
-    - The default lossy priority group configured by SDK
 
 ## 6 Architecture Design ##
 
@@ -394,13 +390,17 @@ Assume port `Ethernet0` is admin down, an example is:
 
 #### 7.1.2 The flow to deploy a switch ####
 
-In the flow, SAI clearing reserved size of ingress lossy priority group, which is the blue area in the flow chart, is suggested to be implemented. Otherwise, there will be buffer oversubscription.
+In the flow, the steps in pink are needed to be implemented.
+
+- INACTIVE_PORT set needs to be generated. Currently, only ACTIVE_PORT set is generated.
+- Zero profiles need to be generated if the INACTIVE_PORT set is not empty.
+- Zero profiles need to be applied to inactive ports.
 
 All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/deploy.jpg "Figure: Deploy flow of static buffer model")
 
-#### 7.1.5 The flow to handle `speed`, `cable length` and `admin status` of the port ####
+#### 7.1.3 The flow to handle `speed`, `cable length` and `admin status` of the port ####
 
 In the flow, buffer manager testing port's admin status and skipping the rest part if it's admin-down, which is the green area in the flow chart, needs to be implemented.
 
@@ -408,27 +408,17 @@ All other steps exist.
 
 ![Flow](reclaim-reserved-buffer-images/normal.jpg "Figure: Normal flow of static buffer model")
 
-#### 7.1.6 The flow to handle `BUFFER_QUEUE` table add entry ####
+#### 7.1.4 The flow to handle `BUFFER_QUEUE` table add entry ####
 
 This is an existing flow. No code change is required.
 
 ![Flow](reclaim-reserved-buffer-images/create-queue.jpg "Figure: create queue")
 
-#### 7.1.7 The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST` table add entry ####
+#### 7.1.5 The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST`, and `BUFFER_PORT_EGRESS_PROFILE_LIST` table add entry ####
 
 This is an existing flow. No code change is required.
 
 ![Flow](reclaim-reserved-buffer-images/create-port-profile-list.jpg "Figure: create port profile list")
-
-#### 7.1.8 The flow to set port's management priority-group to default value ####
-
-In the flow, SAI setting headroom size of management priority-group to the defaule value, which is the blue area in the flow chart, needs to be implemented.
-
-All other steps exist.
-
-![Flow](reclaim-reserved-buffer-images/startup-sai.jpg "Figure: Startup flow related to SAI")
-
-** Note: The port shutdown and startup flow can also be triggered by other flows. In that case, SAI will still handle the management priority-group.
 
 ### 7.2 Enable a port and configure buffer for it ###
 
@@ -524,21 +514,22 @@ After the flow has been successfully executed:
 - Priority group `3` and `4` is enabled with corresponding headroom parameters (`headroom size`, `xon`, `xoff`) and alpha on the port.
 - Priority group `0` is enabled with pipeline latency as `headroom size`.
 - Reserved sizes and alpha of queue and port ingress/egress buffer pool are set according to the buffer profile referenced by the corresponding buffer tables.
-- Headroom size of management priority group of the port is set to default value.
 - Sizes of shared buffer pool and shared headroom pool are set according to configuration.
 
 The flows are the same as those of deploy a switch.
 
-### 7.3 Disable a port and reclaim the buffer reserved for the port ###
+### 7.3 Disable a port and reclaim the buffer reserved for the port after a switch was deployed ###
 
 The user needs to:
 
 - Set the admin status of the port to `down` via executing command `config interface shutdown <port>`.
-- Remove the following entries of the port from `CONFIG_DB`. By default, they will not be configured on a disabled port, which is enforced by `buffer template`.
+- Remove the lossless PG of the port from `CONFIG_DB` and set the following entries to `zero profile`. By default, they are enforced by `buffer template`.
 
   In case the user enabled a port and then decides to disable it, the following entries are in the system and the user has to remove them manually.
 
   There is no way for a user to remove items from the `CONFIG_DB` on the fly. So the only way for a user to do it is to remove the items from `config_db.json` and then to execute `config reload`. Examples of items in each of the following tables are provided in the previous chapter.
+
+  Items need to be set to `zero profile`:
   - entries of admin-down ports in table `BUFFER_QUEUE`, `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST`
   - lossy priority-groups of admin-down ports in table `BUFFER_PG`
 - Calculate the sizes of shared buffer pool and shared headroom pool and then reconfigure them in `BUFFER_POOL` table in `CONFIG_DB`.
@@ -549,7 +540,6 @@ After the flow has been successfully executed:
 - Reserved size and headroom size of port's priority group `0`, `3` and `4` are zero.
 - Reserved size of queues and port buffer pools of the port are zero.
 - Sizes of shared buffer pool and shared headroom pool are updated accordingly.
-- Reserved size and headroom size of port's management priority-group is zero.
 
 The flows of this are the same as those of deploy a switch.
 
@@ -557,15 +547,15 @@ The flows of this are the same as those of deploy a switch.
 
 According to the flows described in above sections, the following flows need to be implemented:
 
-1. Buffer manager to test port's admin status before creating lossless priority group for the port.
-2. Buffer manager to remove port's lossless priority group once the port's admin status is changed to down.
-3. Buffer orch to handle `BUFFER_PG`, and `BUFFER_QUEUE` removing.
-4. Buffer orch to configure zero buffer profile in `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST`.
-5. SAI to set headroom size of management priority group according to port's admin status.
+1. Buffer template to generate zero buffer profiles and apply them if there are inactive ports.
+2. Buffer manager to test port's admin status before creating lossless priority group for the port.
+3. Buffer manager to remove port's lossless priority group once the port's admin status is changed to down.
+4. Buffer orch to handle `BUFFER_PG` removing.
+5. Buffer orch to configure zero buffer profile in `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST`.
 
 ## 8 Dynamic buffer model ##
 
-In dynamic buffer model, the buffer reserved for admin-down ports is reclaimed by removing the objects from `APPL_DB`. Currently, when a port is shut down:
+Currently, when a port is shut down, the buffer reserved for admin-down ports is reclaimed by removing the objects from `APPL_DB` in dynamic buffer model:
 
 1. `buffer manager` removes the item related to the port from buffer tables from `APPL_DB`
 2. `buffer orch` notifies SAI to remove object
@@ -573,10 +563,10 @@ In dynamic buffer model, the buffer reserved for admin-down ports is reclaimed b
 
 ![Flow](reclaim-reserved-buffer-images/dynamic-original.jpg "Figure: Reclaim reserved buffer in dynamic model - original flow")
 
- Now that we have new way to do it, reserved buffer will be reclaimed:
+ Now that we have new way to do it, reserved buffer will be reclaimed by:
 
-- by setting zero profile to corresponding buffer objects if the zero buffer profiles exist.
-- by removing corresponding buffer objects otherwise.
+- removing lossless PG.
+- setting zero profile to corresponding buffer objects.
 
 The new flow is like this.
 
@@ -625,19 +615,6 @@ The SAI API `sai_port_api->set_port_attribute` is used for reclaiming reserved b
     attr.value.objlist.count = 2;
     sai_port_api->set_port_attribute(port.m_port_id, &attr);
 ```
-
-### 9.4 Reclaim reserved buffers allocated by SDK ###
-
-SAI should set the reserved buffer of objects allocated by SDK by default to 0. This is suggested to be done during creating ports.
-It include the following objects:
-
-1. Reserved buffer for default lossy priority group (pipeline latency) if SONiC doesn't create `BUFFER_PG|<port>|0`.
-2. Reserved buffer for queues that are not created by SONiC, like queue 8~16.
-3. Reserved port buffer pool allocated by SDK.
-
-The SAI API `sai_port_api->create_port` is used for creating ports.
-
-After this SAI API called, the reserved buffer of such objects will be set to zero.
 
 ## 10 Configuration and management ##
 
@@ -690,133 +667,3 @@ Lossless PGs should be removed when a port is shutdown. Sizes of shared headroom
 9. Check whether the adjusted sizes are correct
 
 ## 14 Open/Action items - if any ##
-
-### 14.1 clearing reserved buffer of objects allocated by SDK ###
-
-- Whether SAI should clear reserved size of such objects
-  - In any case
-  - Or only if SONiC has created buffer pools?
-- SONiC not creating buffer pools means no buffer configured by SONiC. Clearing reserved size of such objects will result in 0 reserved buffer in default lossy priority group. Will this hurt traffic?
-  - Sometimes there is no QoS configuration in SONiC and the system will run with SDK default in this case.
-
-- No guarantee that buffer pool will be created before ports created in SONiC.
-
-### 14.2 db migrator ###
-
-#### 14.2.1 Is db migrator necessary for bridging the gap between new and old image regarding the way to reclaiming buffer ####
-
-In the old image, when the buffer items are removed after a port is shut down, the SAI will set the reserved buffer size of buffer objects to 0 in SDK.
-
-In the new image, when the system starts without buffer item configured, the SAI will not touch the buffer objects, leaving them as SDK default value.
-
-Do we need db migrator to bridge the gap?
-
-#### 14.2.2 Is db migrator necessary for reserved buffer reclaiming ####
-
-Database migrator is introduced to take care of sizes in buffer pools and lossless buffer profiles changed.
-
-Originally, we would like to introduce db migrator in order to set the buffer pool sizes with reserved buffer of unused ports reclaimed when the system is migrated from an old image without reclaiming unused buffer supported to a new image with it.
-
-Meanwhile, as in the old image the reserved buffer can't be reclaimed, it doesn't make sense for an user to adjust buffer pool size in the old image.
-
-As a result, we don't need to change db migrator for this feature if we decided that it's always user's responsiblity to configure buffer pool sizes after reclaiming reserved buffer.
-
-#### The script to calculate the reclaimed buffer size ####
-
-This script is to calculate the size of buffer that has been reclaimed for admin down ports.
-
-It will be invoked in the following scenarios:
-
-- Calculate the shared buffer pool and shared headroom pool in `db_migrator` for comparing with the default buffer configurations against the current value.
-
-The flow:
-
-1. Fetch the default shared buffer pool sizes from the buffer templates according to the `SKU` and `topology`.
-2. For each admin down ports
-   1. Fetch its speed and cable length
-   2. Calculate the PG size, xoff size.
-3. Put the `size`s of all PGs of admin-down ports together, getting the accumulative size
-4. Put the `xoff`s of all PGs of admin-down ports together, getting the accumulative xoff
-5. Calculate the accumulative private headroom of admin-down ports if shared headroom pool is enabled
-   - `10 kB` * `number of admin-down ports`
-6. Calculate other per port reserved buffer
-   - egress reserved buffer as `egress_lossy_profile.size` * `number of admin-down ports`
-   - reserved headroom for mirror as `10 kB` * `number of admin-down ports`
-7. Add `accumulative size` + (`accumulative xoff` - `accumulative private headroom`) / 2 + `per port egress reserved` to the shared buffer pool
-8. Subtract `accumulative xoff` / 2 from the shared headroom pool size
-
-#### buffer migrator ####
-
-There is a logic in `Mellanox buffer migrator`: only the buffer configuration matches the default value in old image will it be migrated to the default value in new images.
-If the reserved buffer of admin down ports are reclaimed and added back to shared buffer pool, the buffer configuration won't match the default one, which means the buffer configuration won't be migrated. An example is like this:
-
-1. Currently, the `201911` version is used. The database version is `VERSION_1_0_6`.
-2. The user reclaims buffer from admin-down ports and adds them back to shared buffer pool, which causes the size of the shared buffer pools don't match the default one in `VERSION_1_0_6`.
-3. The user will upgrade switch to `202012` version. The database version is `VERSION_2_0_0`. `db_migrator` compares the current buffer configuration against the default one in `VERSION_1_0_6` and finds they are not same and will not migrate buffer configuration to the default values in `VERSION_2_0_0`.
-
-This can be avoided by:
-
-- subtracting the reclaimed buffer size from shared buffer pool size
-- using the difference as the default one when comparing
-
-The flow is like this:
-
-1. For each flavor in default configurations in the old version
-   - Adjust the shared buffer pool size and shared headroom pool size in the default configuration
-   - Compare it with the current buffer configuration in the switch
-   - if they matches
-     - record the `current flavor`
-     - break the iteration
-2. Stop the flow if none of the adjusted default configuration matches the current configuration
-3. Pick the default configuration of the `current flavor`
-4. Adjust the sharred buffer pool size and shared headroom pool size according to the number of admin down ports
-5. Apply the adjusted buffer configurations
-
-Open question
-
-1. Should we migrate the buffer pool size to the one with reserved buffer for admin-down ports' reclaimed? Don't prefer to doing so.
-
-### 14.3 Disable a port and reclaim buffer without executing config reload in traditional model ###
-
-Currently, there is no way for a user to reclaim reserved buffer without executing `config reload` because it requires removing buffer items from `CONFIG_DB` on the fly, which is not supported by any user interface.
-
-In case a user is able to remove items from `CONFIG_DB` on the fly, the system will handle them in the following flows.
-#### 14.3.1 The flow to handle admin status change of the port ####
-
-In the flow, buffer manager handling port admin status change, which is the green area in the flow chart, needs to be implemented.
-
-All other steps exist.
-
-![Flow](reclaim-reserved-buffer-images/shutdown.jpg "Figure: Shutdown a port")
-
-#### 14.3.2 The flow to handle `BUFFER_QUEUE` removing ####
-
-In the flow:
-
-- Buffer manager handling `BUFFER_QUEUE` table removing, which is the green area in the flow chart, needs to be implemented.
-- Buffer orch handling `BUFFER_QUEUE` table removing, which is the green area, needs to be implemented.
-- SAI handling `sai_queue_api->set_queue_attribute` already exists.
-- All other steps exist.
-
-![Flow](reclaim-reserved-buffer-images/remove-queue.jpg "Figure: Remove buffer queue")
-
-#### 14.3.3 The flow to handle `BUFFER_PORT_INGRESS_PROFILE_LIST` and `BUFFER_PORT_EGRESS_PROFILE_LIST` ####
-
-![Flow](reclaim-reserved-buffer-images/remove-profile-list.jpg "Figure: Remove buffer port profile list")
-
-This is a new flow which needs to be implemented.
-
-#### 14.3.4 The flow to handle sizes of buffer pools and shared headroom pool ####
-
-![Flow](reclaim-reserved-buffer-images/recalculate-buffer-pool.jpg "Figure: Recalculate buffer pool and shared headroom pool sizes")
-
-This is an existing flow. No code change is required.
-
-#### 14.3.5 The flow to set port's management priority-group to 0 ####
-
-In the flow, SAI setting headroom size of management priority-group to zero, which is the blue area in the flow chart, needs to be implemented.
-
-All other steps exist.
-
-![Flow](reclaim-reserved-buffer-images/shutdown-sai.jpg "Figure: Shutdown flow related to SAI")
-
