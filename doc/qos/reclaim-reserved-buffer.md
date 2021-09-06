@@ -77,6 +77,7 @@ To make it clear and consistent, we need the following solution:
     - It's user's responsibility to create `zero profile` if he/she disables a port on-the-fly.
   - In `dynamic buffer model`:
     - `zero profile`s will be created once at least 1 unused port exists.
+    - `zero profile`s will be pushed into `APPL_DB` only.
 - SAI should configure buffer objects to:
   - SDK default value, if there is no buffer profile configured for the object in SONiC when SAI is starting.
   - SDK default value, if a buffer object is removed from SONiC
@@ -442,9 +443,14 @@ generate_queue_buffers_with_inactive_ports:
 {% endfor %}
 {% else %}
 {% for port in port_names_inactive.split(',') %}
-        "{{ port }}|0-7": {
+        "{{ port }}|3-4": {
+            "profile" : "[BUFFER_PROFILE|egress_lossless_zero_profile]"
+        },
+        "{{ port }}|0-2": {
             "profile" : "[BUFFER_PROFILE|egress_lossy_zero_profile]"
-        }{% if not loop.last %},{% endif %}
+        },
+        "{{ port }}|5-6": {
+            "profile" : "[BUFFER_PROFILE|egress_lossy_zero_profile]"
         }{% if not loop.last %},{% endif %}
 
 {% endfor %}
@@ -648,9 +654,110 @@ According to the flows described in above sections, the following flows need to 
 
 ## 8 Dynamic buffer model ##
 
-In dynamic buffer model, normal profiles will be configured on all ports and buffer manager will apply zero profiles on inactive ports. The zero profiles are defined in buffer templates which is rendered to json when swss docker is starting and loaded to `buffer manager` when the daemon is starting.
+In dynamic buffer model
 
-### 8.1 Buffer template of zero profiles ###
+- Normal profiles will be configured on all ports in `CONFIG_DB`.
+
+  Reserved buffer of admin down ports is reclaimed by applying zero profiles on PGs, queues and ingress/egress profile lists on the port in `APPL_DB`. `CONFIG_DB` will not be touched during the procedure.
+- Zero profiles will be:
+  - Provided as a json file
+  - Loaded to buffer manager via CLI option `-z`
+  - Applied to `APPL_DB` if all ports is admin up and one port is about to be shut down.
+  - Removed from `APPL_DB` if only one port is admin down and is about to be started up.
+  - For each buffer pool, there should be and only be one zero profiles referencing the buffer pool.
+- When a port is shut down/started up, buffer manager will apply zero/normal profiles on all its buffer objects in `APPL_DB` respectively.
+- For queues and priority groups, zero profiles will be applied on:
+  - Configured buffer items. For each queues and priority groups configured in `CONFIG_DB`, corresponding zero profiles will be applied on it.
+  - Supported-but-not-configured buffer items. In case any queue or priority group is supported by the port but not configured in `CONFIG_DB`, zero profile will be applied on it, which is achieved by generating an extra buffer item in `APPL_DB`.
+
+    This is to guarantee the buffer reserved for any supported-but-not-configured queue or priority group will be reclaimed correctly.
+
+    For example,
+    - A platform supports 16 queues.
+    - Queues `0-2`, and `5-6` are configured as lossy.
+    - Queues `3-4` are configured as lossless.
+
+    The zero profiles will be applied on `0-2`, `3-4`, and `5-6`. As queues `7-15` are also supported but not configured, zero profiles will be applied on them by adding an `BUFFER_QUEUE_TABLE|<port>|7-15` item into `APPL_DB`.
+
+    When the admin-down port is started up, such items will be removed from the system. In case removing queues is not supported on a platform, zero profiles will not be applied on `7-15`.
+  - Specific items. A set of IDs of queues or priority groups should be specific in the json file.
+    - The zero profiles will be applied on a specific set of IDs regardless of which queues/priority groups are configured.
+    - Buffer items on queues/priority groups that are supported on the port but not configured will be removed.
+
+    For example,
+    - Priority group `0` is specified to apply zero profile on.
+    - Priority group `0` is configured as lossy.
+    - Priority group `3-4` is configured as lossless.
+
+    The zero profile will be applied on `0` and the priority group `3-4` will be removed.
+- The number of PGs and queues supported on the port is pushed to `STATE_DB` by ports orchagent and consued by buffer manager.
+- In case the zero profiles are not provided, reserved buffer will be reclaimed by removing PGs and queues.
+
+  If removing is not allowed, reserved buffer will not be reclaimed.
+
+### 8.1 STATE_DB enhancement ###
+
+The maximum number of queues and priority gourps of each port are pushed into `BUFFER_MAX_PARAM_TABLE` table in `STATE_DB` when `ports orchagent` starts.
+
+Currently, there is only one field `max_headroom_size` in the table. The fields `max_priority_groups` and `max_queues` will be added to the table, representing maximum number of priority groups and queues on the port respectively.
+
+```schema
+    key                 = BUFFER_MAX_PARAM_TABLE|<global|port>  ; when key is global, it should contain mmu_size.
+                                                                ; when key is port name, it should contain max_headroom_size, max_priority_groups, and max_queues.
+    ; The following keys have been defined in the table currently.
+    mmu_size            = 1*9DIGIT                              ; Total avaiable memory a buffer pool can occupy
+    max_headroom_size   = 1*6DIGIT                              ; Optional. The maxinum value of headroom size a physical port can have.
+                                                                ; The accumulative headroom size of a port should be less than this threshold.
+                                                                ; Not providing this field means no such limitation for the ASIC.
+    ; The following keys will be introduced in the table for reclaiming reserved buffer
+    max_priority_groups = 2*6DIGIT                              ; The maxinum number of priority groups supported on the port.
+    max_queues          = 2*6DIGIT                              ; The maxinum number of queues supported on the port.
+
+```
+
+### 8.2 Handle the buffer template of zero profiles ###
+
+#### 8.2.1 How the zero profiles are loaded ####
+
+The zero profiles are defined in buffer templates which is rendered to json when swss docker is created and loaded to `buffer manager` when the daemon is starting via CLI options.
+
+Currently, the CLI options to start the dynamic buffer manager includes
+
+```CLI
+Usage: buffermgrd <-l pg_lookup.ini|-a asic_table.json [-p peripheral_table.json]>
+       -l pg_lookup.ini: PG profile look up table file (mandatory for static mode)
+           format: csv
+           values: 'speed, cable, size, xon,  xoff, dynamic_threshold, xon_offset'
+       -a asic_table.json: ASIC-specific parameters definition (mandatory for dynamic mode)
+       -p peripheral_table.json: Peripheral (eg. gearbox) parameters definition (mandatory for dynamic mode)
+```
+
+We will extend CLI options by adding `-z` which represents the json file containing the zero profiles:
+
+```CLI
+       -z zero_profiles.json: Zero profiles definition for reclaiming unused buffers (optional for dynamic mode)
+```
+
+The zero profiles will always not be inserted into `CONFIG_DB`.
+
+They will not be inserted into `APPL_DB` until at least one port is shut down. After that, if all ports are admin up, the zero profiles will be removed from `APPL_DB`.
+
+#### 8.2.2 The json file for buffer template ####
+
+##### 8.2.2.2 The structure of the json file #####
+
+The json file contains a list of zero pools (if necessary) and profiles, which will be handled by buffer manager. Any zero pool should be defined ahead of zero profiles to make sure all the buffer pools have been parsed when any buffer profiles is being parsed. This is to meet the dependency.
+
+There is also an item containing control fields, including:
+
+- `pgs_to_reclaim`: In case zero profiles are not required to be applied on either all or configured priority groups, an ID map on which zero profiles should be applied can be specified on a per-platform basis in this field.
+- `queues_to_reclaim`: Similar to `pgs_to_reclaim` but for queues.
+- `ingress_zero_profile`: The ingress zero profile, in case the vendor need to specify it explicitly. By default, the zero profile of each buffer pool is the profile in the list and referencing the pool.
+- `support_remove_profile`: By default, it is `yes`. In this case, the normal profiles will be removed from the admin down port before applying the zero profiles on all priority groups or queues.
+
+  In case removing is not supported by vendor, this field should be specified as `no`. In this case, the zero profiles will be applied on all configured priority groups and queues.
+
+##### 8.2.2.2 An example of buffer template of zero profiles #####
 
 This is an example of buffer template of zero profiles.
 
@@ -707,7 +814,6 @@ This is an example of buffer template of zero profiles.
     {
         "ids_to_reclaim" : {
             "pgs_to_reclaim":"0",
-            "queues_to_reclaim":"0-7",
             "ingress_zero_profile":"[BUFFER_PROFILE_TABLE:ingress_lossy_pg_zero_profile]"
         },
         "OP": "SET"
@@ -715,7 +821,17 @@ This is an example of buffer template of zero profiles.
 ]
 ```
 
-### 8.2 The flows ###
+### 8.3 Generate maximum number of queues and priority groups for each port ###
+
+The ports orchagent fetches the maximum numbers of queues and priority groups of a port via SAI interfaces when it is creating the port. After that, it will push the maximum numbers to `STATE_DB.BUFFER_MAX_PARAM_TABLE`.
+
+The buffer manager listens to the tables. Once it has heard the maximum numbers, it will generage the IDs of all queues and priority groups and store them into its internal data structure. The IDs of all queues and priority groups can be used to apply zero profiles when a port is admin down. In case the buffer manager hasn't heard the maximum buffers when a port is shut down, it will mark the port as `pending apply zero profiles` and retry later.
+
+The flow of handling maximum numbers is:
+
+![Flow](reclaim-reserved-buffer-images/dynamic-port-init.jpg "Figure: Port init flow (focusing on maximum numbers handling)")
+
+### 8.4 Handle the port admin up/down ###
 
 Currently, when a port is shut down, the buffer reserved for admin-down ports is reclaimed by removing the objects from `APPL_DB` in dynamic buffer model:
 
@@ -727,18 +843,20 @@ Currently, when a port is shut down, the buffer reserved for admin-down ports is
 
 Now that we have new way to do it, reserved buffer will be reclaimed by:
 
-- removing lossless PGs.
-- setting zero profile to corresponding buffer objects, including buffer PGs, buffer queues, and buffer profile lists.
+- Removing lossless PGs.
+- Setting zero profile to corresponding buffer objects, including buffer PGs, buffer queues, and buffer profile lists.
 
-The new flow is like this.
+The new flow for admin down handling is:
 
 ![Flow](reclaim-reserved-buffer-images/dynamic-new.jpg "Figure: Reclaim reserved buffer in dynamic model - new flow")
 
 ## 9 SAI API ##
 
+There is no new SAI API or attribute introduced in this design. The SAI APIs and attributes referenced in this design are list below.
+
 ### 9.1 Reclaim priority groups ###
 
-The SAI API `sai_buffer_api->set_ingress_priority_group_attribute` is used for reclaiming reservied buffer for priority groups. The arguments should be the following:
+The SAI API `sai_buffer_api->set_ingress_priority_group_attribute` is used for reclaiming reserved buffer for priority groups. The arguments should be the following:
 
 ```C
     attr.id = SAI_INGRESS_PRIORITY_GROUP_ATTR_BUFFER_PROFILE;
