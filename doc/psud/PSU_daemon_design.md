@@ -162,16 +162,17 @@ The current output for "show platform psustatus" looks like:
 
 ```
 admin@sonic:~$ show platform  psustatus
-PSU    Model          Serial        HW Rev      Voltage (V)    Current (A)    Power (W)  Status LED
------  -------------  ------------  --------  -------------  -------------  -----------  ------ -----
-PSU 1  MTEF-PSF-AC-A  MT1629X14911  A3                12.08           5.19        62.62  Not OK red
-PSU 2  MTEF-PSF-AC-A  MT1629X14913  A3                12.01           4.38        52.50  OK     green
+PSU    Model          Serial        HW Rev      Voltage (V)    Current (A)    Power (W)  Status  LED
+-----  -------------  ------------  --------  -------------  -------------  -----------  ------- -----
+PSU 1  MTEF-PSF-AC-A  MT1629X14911  A3                12.08           5.19        62.62  Warning red
+PSU 2  MTEF-PSF-AC-A  MT1629X14913  A3                12.01           4.38        52.50  OK      green
 ```
 
 The field `Status` represents the status of the PSU, which can be the following:
 - `OK` which represents no alarm raised due to PSU power exceeding the threshold
 - `Not OK` which can be caused by:
   - power is not good, which means the PSU is present but no power
+- `Warning` which can be caused by:
   - power exceeds the PSU's power threshold
 
 ## 5. PSU LED management
