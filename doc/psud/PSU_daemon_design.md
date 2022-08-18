@@ -26,7 +26,9 @@ The purpose of PSU daemon is to collect platform PSU data and trigger proper act
   - whether the total PSU power consumption exceeds the budget (modular switch only)
   - whether PSU power consumption exceeds the PSU threshold
 
-### 1.1 Why we need PSU power threshold check
+### 1.1 PSU power threshold check
+
+#### 1.1.1 Why we need it
 
 An ethernet switch is typically equipped with more than one PSUs for redundancy. It can be deployed in different scenarios with different kinds of xSFP modules, traffic type and traffic load. All these factors affect the power consumption of an ethernet switch.
 
@@ -45,7 +47,6 @@ Now psud collects PSU data via platform API, and it also support platform plugin
 ### 2.1 PSU data collection specific to PSU power exceeding check
 
 We will leverage the existing framework of PSU daemon, adding corresponding logic to perform PSU power check.
-The following diagram is the flow of the PSU daemon where the flows in red represent the new flows introduced for PSU power checking.
 
 Currently, PSU daemon is waken up periodically, executing the following flows (flows in bold are newly introduced by the feature):
 
@@ -56,8 +57,6 @@ Currently, PSU daemon is waken up periodically, executing the following flows (f
    - Fetch voltage, current, power via calling platform API
    - __Perform PSU power checking logic__
    - Update all the information to database
-
-![Flow](PSU_daemon_design_pictures/PSU-daemon.svg "Figure 2: PSU daemon")
 
 We will detail the new flows in the following sections.
 
@@ -74,12 +73,10 @@ The PSU power checking will not be checked for a PSU if `NotImplemented` excepti
 
 #### Alarm raising and clearing threshold
 
-By default,
+We use asymmetric thresholds between raising and clearing the alarm for the purpose of creating a hysteresis and avoiding alarm flapping.
 
 - an alarm will be raised when a PSU's power is rising accross the critical threshold
 - an alarm will be cleared when a PSU's power is dropping across the warning threshold
-
-We use asymmetric thresholds between raising and clearing the alarm for the purpose of creating a hysteresis and avoiding alarm flapping.
 
 #### PSU power checking logic
 
@@ -109,33 +106,33 @@ PSU number is stored in chassis table. Please refer to this [document](https://g
 
 PSU information is stored in PSU table:
 
-	; Defines information for a psu
-	; field                   = value
-	presence                  = BOOLEAN                        ; presence state of the psu
-	model                     = STRING                         ; model name of the psu
-	serial                    = STRING                         ; serial number of the psu
-  revision                  = STRING                         ; hardware revision of the PSU
-	status                    = BOOLEAN                        ; status of the psu
-	change_event              = STRING                         ; change event of the psu
-	fan                       = STRING                         ; fan_name of the psu
-	led_status                = STRING                         ; led status of the psu
-  is_replaceable            = STRING                         ; whether the PSU is replaceable
-  temp                      = 1*3.3DIGIT                     ; temperature of the PSU
-  temp_threshold            = 1*3.3DIGIT                     ; temperature threshold of the PSU
-  voltage                   = 1*3.3DIGIT                     ; the output voltage of the PSU
-  voltage_min_threshold     = 1*3.3DIGIT                     ; the minimal voltage threshold of the PSU
-  voltage_max_threshold     = 1*3.3DIGIT                     ; the maximum voltage threshold of the PSU
-  current                   = 1*3.3DIGIT                     ; the current of the PSU
-  power                     = 1*4.3DIGIT                     ; the power of the PSU
-  power_overload            = "true" / "false"               ; whether the PSU's power exceeds the threshold
-  power_threshold           = 1*4.3DIGIT                     ; The power (warning) threshold
-  power_critical_threshold  = 1*4.3DIGIT                     ; The power critical threshold
-
+    ; Defines information for a psu
+    ; field                   = value
+    presence                  = BOOLEAN                        ; presence state of the psu
+    model                     = STRING                         ; model name of the psu
+    serial                    = STRING                         ; serial number of the psu
+    revision                  = STRING                         ; hardware revision of the PSU
+    status                    = BOOLEAN                        ; status of the psu
+    change_event              = STRING                         ; change event of the psu
+    fan                       = STRING                         ; fan_name of the psu
+    led_status                = STRING                         ; led status of the psu
+    is_replaceable            = STRING                         ; whether the PSU is replaceable
+    temp                      = 1*3.3DIGIT                     ; temperature of the PSU
+    temp_threshold            = 1*3.3DIGIT                     ; temperature threshold of the PSU
+    voltage                   = 1*3.3DIGIT                     ; the output voltage of the PSU
+    voltage_min_threshold     = 1*3.3DIGIT                     ; the minimal voltage threshold of the PSU
+    voltage_max_threshold     = 1*3.3DIGIT                     ; the maximum voltage threshold of the PSU
+    current                   = 1*3.3DIGIT                     ; the current of the PSU
+    power                     = 1*4.3DIGIT                     ; the power of the PSU
+    power_overload            = "true" / "false"               ; whether the PSU's power exceeds the threshold
+    power_threshold           = 1*4.3DIGIT                     ; The power (warning) threshold
+    power_critical_threshold  = 1*4.3DIGIT                     ; The power critical threshold
 
 Now psud only collect and update "presence" and "status" field.
 
 ## 4. PSU command
 
+### 4.1 show platform psustatus
 There is a sub command "psustatus" under "show platform"
 
 ```
@@ -164,7 +161,7 @@ The current output for "show platform psustatus" looks like:
 admin@sonic:~$ show platform  psustatus
 PSU    Model          Serial        HW Rev      Voltage (V)    Current (A)    Power (W)  Status  LED
 -----  -------------  ------------  --------  -------------  -------------  -----------  ------- -----
-PSU 1  MTEF-PSF-AC-A  MT1629X14911  A3                12.08           5.19        62.62  Warning red
+PSU 1  MTEF-PSF-AC-A  MT1629X14911  A3                12.08           5.19        62.62  WARNING green
 PSU 2  MTEF-PSF-AC-A  MT1629X14913  A3                12.01           4.38        52.50  OK      green
 ```
 
@@ -172,8 +169,28 @@ The field `Status` represents the status of the PSU, which can be the following:
 - `OK` which represents no alarm raised due to PSU power exceeding the threshold
 - `Not OK` which can be caused by:
   - power is not good, which means the PSU is present but no power
-- `Warning` which can be caused by:
+- `WARNING` which can be caused by:
   - power exceeds the PSU's power threshold
+
+### 4.2 psuutil
+
+`psuutil` fetches the information via calling platform API directly. Both warning and critical thresholds will be exposed in the output of psuutil status.
+The "WARNING" state is not exposed because psuutil is a one-time command instead of a daemon, which means it does not store state information. It fetches information via calling platform API so it can not distinguish the following status:
+
+1. The power exceeded the critical threshold but is in the range between the warning and critical thresholds, which means the alarm should be raised
+2. The power didn't exceed the critical threshold and exceeds the warning threshold, which means the alarm should not be raised
+
+An example of output
+```
+admin@sonic:~$ show platform psustatus
+PSU   Model         Serial       HW Rev   Voltage (V)   Current (A)   Power (W)   Power Warn Thres (W)   Power Crit Thres (W)    Status LED
+----- ------------- ------------ -------- ------------- ------------- ----------- ---------------------- ---------------------- ------- -----
+PSU 1 MTEF-PSF-AC-A MT1843K17965 A4               12.02          3.62       43.56                  38.00                  58.00 OK      green
+PSU 2 MTEF-PSF-AC-A MT1843K17966 A4               12.04          4.25       51.12                  38.00                  58.00 OK      green
+
+```
+
+In case neither threshold is supported on the platform, `N/A` will be displayed.
 
 ## 5. PSU LED management
 
@@ -215,17 +232,6 @@ We define a few abnormal PSU events here. When any PSU event happens, syslog sho
 
     Recover Message: PSU absence warning cleared: <psu_name> is inserted back.
 
-#### 5.1.5 PSU power exceeds threshold
-
-    Alert Message: `<psu_name>: current power <power> is below the warning threshold <threshold>` where
-       - `<power>` is the current power of the PSU
-       - `<threshold>` is the warning threshold of the PSU according to the current ambient temperature
-
-    PSU LED color: red.
-
-    Recover Message: `<psu_name>: current power <power> is exceeding the critical threshold <threshold>` where
-       - `<power>` is the current power of the PSU
-       - `<threshold>` is the warning threshold of the PSU according to the current ambient temperature
 ### 5.2 Platform API change
 
 Some abstract member methods need to be added to [psu_base.py](https://github.com/Azure/sonic-platform-common/blob/master/sonic_platform_base/psu_base.py) and vendor should implement these methods.
@@ -271,7 +277,7 @@ class PsuBase(device_base.DeviceBase):
 
 Supervisord takes charge of this daemon. This daemon will loop every 3 seconds and get the data from psuutil/platform API and then write it the Redis DB.
 
-- The psu_num will store in "chassis_info" table. It will just be invoked one time when system boot up or reload. The key is chassis_name, the field is "psu_num" and the value is from get_psu_num(). 
+- The psu_num will store in "chassis_info" table. It will just be invoked one time when system boot up or reload. The key is chassis_name, the field is "psu_num" and the value is from get_psu_num().
 - The psu_status and psu_presence will store in "psu_info" table. It will be updated every 3 seconds. The key is psu_name, the field is "presence" and "status", the value is from get_psu_presence() and get_psu_num().
 - The daemon query PSU event every 3 seconds via platform API. If any event detects, it should set PSU LED color accordingly and trigger proper syslog.
 
